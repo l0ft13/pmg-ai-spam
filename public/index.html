@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mail triage</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --line: #dfe3e8; --text: #1c2430; --muted: #66707d;
+    --accent: #1f5fbf; --ok: #1a7f4b; --ok-bg: #e3f4ea; --warn: #9a6200; --warn-bg: #fdf1d6;
+    --bad: #b3261e; --bad-bg: #fbe6e4; --hover: #f0f3f7; --current: #dde9fb; --picked: #eef4fd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181d; --panel: #1c2128; --line: #303843; --text: #e4e8ed; --muted: #97a1ad;
+      --accent: #6ea8ff; --ok: #5fd08f; --ok-bg: #173525; --warn: #f0c05a; --warn-bg: #3a2f12;
+      --bad: #ff8a80; --bad-bg: #40201d; --hover: #232a33; --current: #27405f; --picked: #202c3b;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0; }
+  #status { color: var(--muted); font-size: 13px; flex: 1; min-width: 200px; }
+  .tabs { display: flex; gap: 4px; }
+  .tabs button, .seg button { border: 1px solid var(--line); background: transparent; color: var(--muted); padding: 5px 12px; border-radius: 5px; cursor: pointer; font: inherit; }
+  .tabs button[aria-selected="true"], .seg button[aria-pressed="true"] { background: var(--current); color: var(--text); font-weight: 600; border-color: var(--accent); }
+  .tabs .n { display: inline-block; min-width: 20px; margin-left: 4px; padding: 0 6px; border-radius: 10px; background: var(--line); color: var(--text); font-size: 12px; font-weight: 600; text-align: center; }
+  .tabs .n:empty { display: none; }
+  #n-review.some { background: var(--accent); color: var(--panel); }
+  button.act { font: inherit; padding: 5px 12px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; }
+  button.act:hover:not(:disabled) { background: var(--hover); }
+  button.act:disabled { opacity: .45; cursor: default; }
+  button.release { border-color: var(--ok); color: var(--ok); }
+  button.delete { border-color: var(--bad); color: var(--bad); }
+
+  .split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(320px, 440px) 1fr; }
+  .left { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .bar label { display: flex; gap: 6px; align-items: center; color: var(--muted); margin-right: auto; }
+  #list { flex: 1; overflow-y: auto; outline: none; }
+  #list:focus-visible .row.current { box-shadow: inset 3px 0 0 var(--accent); }
+  .row { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: default; user-select: none; }
+  .row:hover { background: var(--hover); }
+  .row.picked { background: var(--picked); }
+  .row.current { background: var(--current); }
+  .row .top { display: flex; gap: 8px; align-items: baseline; }
+  .row .who { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .row .subj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .why { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; margin-top: 2px; min-width: 0; }
+  .row .why span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .legitimate, .released, .pass { background: var(--ok-bg); color: var(--ok); }
+  .unsure, .none, .neutral { background: var(--warn-bg); color: var(--warn); }
+  .spam, .deleted, .fail { background: var(--bad-bg); color: var(--bad); }
+  .empty { padding: 40px 20px; text-align: center; color: var(--muted); }
+  .keys { padding: 6px 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font: 11px ui-monospace, Consolas, monospace; }
+
+  #pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .phead { padding: 14px 18px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .phead h2 { font-size: 18px; margin: 0 0 8px; overflow-wrap: anywhere; }
+  .ptop { display: flex; gap: 12px; align-items: flex-start; }
+  .ptop .grow { flex: 1; min-width: 0; }
+  .pacts { display: flex; gap: 6px; align-items: flex-start; }
+  .pacts details.menu { position: relative; margin-left: -4px; }
+  .menu summary { list-style: none; display: block; padding: 5px 8px; border-radius: 5px; border: 1px solid; cursor: pointer; user-select: none; }
+  .menu summary::-webkit-details-marker { display: none; }
+  .menu .items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 4; display: flex; flex-direction: column; gap: 4px; padding: 6px; min-width: 260px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+  .menu .items button { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+  .meta { display: grid; grid-template-columns: max-content 1fr; gap: 1px 10px; margin: 0; font-size: 13px; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; overflow-wrap: anywhere; }
+  .meta .addr { color: var(--muted); }
+  .verdict { margin-top: 10px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .alert { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: var(--bad-bg); color: var(--bad); font-size: 13px; overflow-wrap: anywhere; }
+  .note { margin-top: 8px; color: var(--muted); font-size: 12px; }
+  .pbar { display: flex; gap: 10px; align-items: center; padding: 8px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .seg { display: flex; gap: 4px; flex-wrap: wrap; }
+  a.file { text-decoration: none; cursor: pointer; }
+  a.file:hover { text-decoration: underline; }
+  a.dl { margin-left: auto; text-decoration: none; font: inherit; padding: 5px 12px; border-radius: 5px; border: 1px solid var(--line); color: var(--text); white-space: nowrap; }
+  a.dl:hover { background: var(--hover); }
+  .pbody { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .pbody iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+  .pbody pre { flex: 1; margin: 0; padding: 16px 18px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.55 system-ui, "Segoe UI", sans-serif; }
+  .pbody pre.mono { font: 12px/1.5 ui-monospace, Consolas, monospace; }
+  .pbody .info { flex: 1; overflow: auto; padding: 16px 18px; }
+  .info h3 { font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  .info h3:first-child { margin-top: 0; }
+  .info table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .info td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+  .info td.bad { color: var(--bad); }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 6px; display: none; max-width: 90vw; z-index: 5; }
+  @media (max-width: 820px) {
+    .split { grid-template-columns: 1fr; grid-template-rows: 45% 55%; }
+    .left { border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mail triage</h1>
+  <div class="tabs" role="tablist">
+    <button role="tab" data-view="review" aria-selected="true">Needs review <span class="n" id="n-review"></span></button>
+    <button role="tab" data-view="spam" aria-selected="false">Obvious spam <span class="n" id="n-spam"></span></button>
+    <button role="tab" data-view="history" aria-selected="false">History <span class="n" id="n-history"></span></button>
+  </div>
+  <div id="status">Loading…</div>
+  <button class="act" id="poll">Check quarantine now</button>
+</header>
+<div class="split">
+  <section class="left">
+    <div class="bar">
+      <label><input type="checkbox" id="all"> <span id="count"></span></label>
+      <button class="act release" id="bulk-release" disabled>Release</button>
+      <button class="act delete" id="bulk-delete" disabled>Delete</button>
+    </div>
+    <div id="list" role="listbox" aria-multiselectable="true" aria-label="Messages" tabindex="0"></div>
+    <div class="keys"><kbd>↑</kbd> <kbd>↓</kbd> read · <kbd>Space</kbd> tick · <kbd>Shift</kbd>+click or <kbd>Shift</kbd>+<kbd>↑↓</kbd> tick a range · <kbd>Ctrl</kbd>+<kbd>A</kbd> all · <kbd>Del</kbd> delete</div>
+  </section>
+  <section id="pane" aria-live="polite"></section>
+</div>
+<div id="toast" role="status"></div>
+<script>
+const EMPTY = { review: "Nothing needs review.", spam: "No obvious spam is waiting.", history: "No decisions recorded yet." };
+let view = "review", rows = [], selected = new Set(), current = null, anchor = null, bodyMode = "formatted";
+const rowEls = new Map(), contentCache = new Map();
+let paneTimer = null, paneToken = 0;
+const $ = (id) => document.getElementById(id);
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (k.startsWith("aria-") || k === "role" || k === "sandbox" || k === "referrerpolicy") node.setAttribute(k, v);
+    else node[k] = v;
+  }
+  for (const c of children) if (c != null) node.append(c);
+  return node;
+}
+
+async function api(path, body) {
+  // location.origin, because a page opened as user:pass@host cannot fetch relative URLs.
+  const res = await fetch(location.origin + path, body
+    ? { method: "POST", headers: { "Content-Type": "application/json", "X-Requested-With": "mailtriage" }, body: JSON.stringify(body) }
+    : {});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Request failed (" + res.status + ")");
+  return data;
+}
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.style.display = "none"), 4000);
+}
+
+function shortWhen(iso) {
+  const d = new Date(iso), today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+function fullWhen(iso) {
+  return new Date(iso).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+/** "Name <a@b>" into its two halves. */
+function splitFrom(from) {
+  const m = (from || "").match(/^\s*"?([^"<]*?)"?\s*<([^<>]+)>\s*$/);
+  return m ? { name: m[1].trim() || m[2], addr: m[2] } : { name: from || "(unknown sender)", addr: "" };
+}
+const domainOf = (addr) => ((addr || "").match(/@([^\s<>"]+)/)?.[1] || "").toLowerCase().replace(/>$/, "");
+function hostOf(url) { try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; } }
+
+function badge(r) {
+  if (view === "history") return el("span", { class: "badge " + r.status }, r.status);
+  if (!r.verdict) return el("span", { class: "badge none", title: r.classify_error || "" }, r.classify_error ? "AI failed" : "waiting");
+  return el("span", { class: "badge " + r.verdict }, r.verdict + " " + r.confidence + "%");
+}
+
+/* ---------- list ---------- */
+
+function renderList() {
+  const list = $("list"); list.replaceChildren(); rowEls.clear();
+  if (!rows.length) list.append(el("div", { class: "empty" }, EMPTY[view]));
+  const acting = view !== "history";
+  for (const r of rows) {
+    const box = el("input", { type: "checkbox", tabIndex: -1, disabled: !acting, "aria-label": "Tick message",
+      onclick: (e) => { e.stopPropagation(); pick(r.id, e.shiftKey, true); $("list").focus(); } });
+    const node = el("div", { class: "row", id: "row-" + r.id, role: "option",
+      onclick: (e) => { setCurrent(r.id, false); if (e.shiftKey) range(r.id); else if (e.ctrlKey || e.metaKey) pick(r.id, false, true); else anchor = r.id; paint(); } },
+      box,
+      el("div", { style: "min-width:0" },
+        el("div", { class: "top" }, el("span", { class: "who" }, splitFrom(r.from_header).name), el("span", { class: "when" }, shortWhen(r.received_at))),
+        el("div", { class: "subj" }, r.subject || "(no subject)"),
+        el("div", { class: "why" }, badge(r), el("span", {}, r.reason || r.classify_error || ""))));
+    node.box = box; rowEls.set(r.id, node); list.append(node);
+  }
+  paint();
+}
+
+/** Update highlight, ticks and buttons without rebuilding the list. */
+function paint() {
+  for (const [id, node] of rowEls) {
+    node.classList.toggle("current", id === current);
+    node.classList.toggle("picked", selected.has(id));
+    node.setAttribute("aria-selected", String(selected.has(id)));
+    node.box.checked = selected.has(id);
+  }
+  $("list").setAttribute("aria-activedescendant", current != null ? "row-" + current : "");
+  const acting = view !== "history", n = selected.size;
+  $("all").disabled = !acting || !rows.length;
+  $("all").checked = rows.length > 0 && n === rows.length;
+  $("all").indeterminate = n > 0 && n < rows.length;
+  $("count").textContent = n ? n + " of " + rows.length + " ticked" : rows.length + " message" + (rows.length === 1 ? "" : "s");
+  $("bulk-release").disabled = $("bulk-delete").disabled = !acting || n === 0;
+  $("bulk-release").textContent = "Release" + (n ? " " + n : "");
+  $("bulk-delete").textContent = "Delete" + (n ? " " + n : "");
+}
+
+const indexOf = (id) => rows.findIndex((r) => r.id === id);
+
+function setCurrent(id, scroll = true) {
+  if (id === current) return;
+  current = id;
+  if (scroll) rowEls.get(id)?.scrollIntoView({ block: "nearest" });
+  clearTimeout(paneTimer);
+  paneTimer = setTimeout(showPane, contentCache.has(id) ? 0 : 120);
+}
+
+/** Tick everything between the anchor and this row. */
+function range(id) {
+  const a = indexOf(anchor ?? id), b = indexOf(id);
+  if (a < 0 || b < 0 || view === "history") return;
+  selected = new Set(rows.slice(Math.min(a, b), Math.max(a, b) + 1).map((r) => r.id));
+}
+
+function pick(id, shift, repaint) {
+  if (view === "history") return;
+  if (shift && anchor != null) range(id);
+  else { selected.has(id) ? selected.delete(id) : selected.add(id); anchor = id; }
+  if (repaint) paint();
+}
+
+function move(delta, shift) {
+  if (!rows.length) return;
+  const at = current == null ? (delta > 0 ? -1 : rows.length) : indexOf(current);
+  const next = rows[Math.max(0, Math.min(rows.length - 1, at + delta))];
+  if (shift && anchor == null) anchor = current ?? next.id;
+  setCurrent(next.id);
+  if (shift) range(next.id); else anchor = next.id;
+  paint();
+}
+
+$("list").addEventListener("keydown", (e) => {
+  const k = e.key;
+  if (k === "ArrowDown" || k === "j") move(1, e.shiftKey);
+  else if (k === "ArrowUp" || k === "k") move(-1, e.shiftKey);
+  else if (k === "PageDown") move(10, e.shiftKey);
+  else if (k === "PageUp") move(-10, e.shiftKey);
+  else if (k === "Home") move(-rows.length, e.shiftKey);
+  else if (k === "End") move(rows.length, e.shiftKey);
+  else if (k === " " && current != null) pick(current, false, true);
+  else if (k === "a" && (e.ctrlKey || e.metaKey)) { if (view !== "history") selected = new Set(rows.map((r) => r.id)); paint(); }
+  else if (k === "Escape") { selected.clear(); paint(); }
+  else if (k === "Delete" && view !== "history") { const ids = selected.size ? [...selected] : current != null ? [current] : []; if (ids.length) act("delete", ids); }
+  else return;
+  e.preventDefault();
+});
+
+/* ---------- reading pane ---------- */
+
+function authChips(mail) {
+  const all = mail.authResults.join(" ") + " " + (mail.receivedSpf ? "spf=" + mail.receivedSpf.trim().split(/\s/)[0] : "");
+  const chips = [];
+  for (const name of ["spf", "dkim", "dmarc"]) {
+    const result = all.match(new RegExp("\\b" + name + "=(\\w+)", "i"))?.[1]?.toLowerCase();
+    const cls = !result ? "neutral" : result === "pass" ? "pass" : /fail|permerror/.test(result) ? "fail" : "neutral";
+    chips.push(el("span", { class: "badge " + cls, title: "Sender authentication check" }, name.toUpperCase() + " " + (result || "not checked")));
+  }
+  return chips;
+}
+
+/** Things a careful reader would want pointed out. */
+function warnings(mail) {
+  const out = [], fromDomain = domainOf(mail.from);
+  if (mail.replyTo && domainOf(mail.replyTo) && domainOf(mail.replyTo) !== fromDomain)
+    out.push("Replies go to a different domain: " + mail.replyTo);
+  if (mail.returnPath && domainOf(mail.returnPath) && fromDomain && !domainOf(mail.returnPath).endsWith(fromDomain.split(".").slice(-2).join(".")))
+    out.push("Sent via a different domain than it claims: " + domainOf(mail.returnPath));
+  const fake = mail.links.filter(misleading);
+  if (fake.length) out.push(fake.length + " link" + (fake.length > 1 ? "s show" : " shows") + " one address but go" + (fake.length > 1 ? "" : "es") + " to another, e.g. shown as " + fake[0].text + " but opens " + hostOf(fake[0].href));
+  const risky = mail.attachments.filter((a) => /\.(exe|scr|js|vbs|bat|cmd|ps1|lnk|iso|img|html?|hta|jar|docm|xlsm|zip|rar|7z)$/i.test(a.filename));
+  if (risky.length) out.push("Risky attachment type: " + risky.map((a) => a.filename).join(", "));
+  return out;
+}
+function misleading(link) {
+  const shown = (link.text || "").match(/(?:https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z]{2,})/i)?.[1]?.toLowerCase().replace(/^www\./, "");
+  const real = hostOf(link.href);
+  return !!shown && !!real && shown !== real && !real.endsWith("." + shown);
+}
+
+const imagesOn = new Set(); // messages where you chose to load remote images
+
+function frameFor(html, remoteImages) {
+  // Scripts cannot run (sandbox) and nothing is fetched from the internet (CSP), so
+  // opening a message never tells the sender it was read. Links inside do nothing.
+  const head = '<!doctype html><meta charset="utf-8">' +
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:" + (remoteImages ? " https: http:" : "") + "; style-src 'unsafe-inline'; font-src data:\">" +
+    "<style>html{background:#fff}body{margin:14px 18px;color:#111;font:14px/1.5 system-ui,'Segoe UI',sans-serif;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}a{cursor:not-allowed}</style>";
+  return el("iframe", { sandbox: "", referrerpolicy: "no-referrer", title: "Message content", srcdoc: head + html });
+}
+
+function sizeText(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
+
+function detailsView(data) {
+  const { mail, rules } = data, box = el("div", { class: "info" });
+  const table = (title, items, toRow) => {
+    if (!items.length) return;
+    const t = el("table");
+    for (const it of items) t.append(toRow(it));
+    box.append(el("h3", {}, title), t);
+  };
+  table("Attachments", mail.attachments, (a) => el("tr", {}, el("td", {}, a.filename), el("td", {}, a.contentType), el("td", {}, sizeText(a.size))));
+  table("Where the links go", mail.links, (l) => el("tr", {},
+    el("td", { class: misleading(l) ? "bad" : "" }, l.text || "(no text)"), el("td", { class: misleading(l) ? "bad" : "" }, l.href)));
+  table("Gateway rules that fired", [...rules].sort((a, b) => b.score - a.score), (r) => el("tr", {}, el("td", {}, r.name), el("td", {}, String(r.score)), el("td", {}, r.desc || "")));
+  if (!box.children.length) box.append(el("div", { class: "empty" }, "No attachments, links or rules to show."));
+  return box;
+}
+
+/** The "▾" beside Release / Delete: do it and also list the sender in PMG. */
+function listMenu(r, action) {
+  // PMG's rules match the envelope sender, which can differ from the From shown.
+  const addr = (r.envelope_sender || r.sender_addr || "").toLowerCase().replace(/^<|>$/g, "");
+  const domain = addr.split("@")[1];
+  const verb = action === "release" ? "Release + whitelist " : "Delete + blocklist ";
+  const menu = el("details", { class: "menu" }, el("summary", { class: "act " + action, title: verb.trim() + " the sender", "aria-label": verb.trim() + " the sender" }, "▾"));
+  const items = el("div", { class: "items" });
+  if (!domain) items.append(el("div", { class: "note", style: "margin:6px 10px" }, "This message has no sender address to list."));
+  else {
+    const star = (kind) => (action === "delete" && r.verdict === "spam" && r.block_advice === kind ? "  ★ AI suggests" : "");
+    items.append(
+      el("button", { class: "act", onclick: () => { menu.open = false; act(action, [r.id], "address"); } }, verb + addr + star("address")),
+      el("button", { class: "act", onclick: () => { menu.open = false; act(action, [r.id], "domain"); } }, verb + "everything from " + domain + star("domain")));
+  }
+  menu.append(items);
+  return menu;
+}
+document.addEventListener("click", (e) => document.querySelectorAll("details.menu[open]").forEach((m) => { if (!m.contains(e.target)) m.open = false; }));
+
+function renderPane(r, data, error) {
+  const pane = $("pane");
+  if (!r) return pane.replaceChildren(el("div", { class: "empty" }, rows.length ? "Choose a message to read it." : ""));
+  const from = splitFrom(r.from_header), acting = view !== "history";
+  const head = el("div", { class: "phead" },
+    el("div", { class: "ptop" },
+      el("div", { class: "grow" }, el("h2", {}, r.subject || "(no subject)")),
+      acting ? el("div", { class: "pacts" },
+        el("button", { class: "act release", onclick: () => act("release", [r.id]) }, "Release"),
+        listMenu(r, "release"),
+        el("button", { class: "act delete", onclick: () => act("delete", [r.id]) }, "Delete"),
+        listMenu(r, "delete")) : null));
+  const meta = el("dl", { class: "meta" });
+  const add = (k, ...v) => meta.append(el("dt", {}, k), el("dd", {}, ...v));
+  add("From", el("strong", {}, from.name), from.addr ? el("span", { class: "addr" }, "  <" + from.addr + ">") : null);
+  if (data?.mail.replyTo) add("Reply to", data.mail.replyTo);
+  add("To", data?.mail.to || r.receiver);
+  if (data?.mail.to && !data.mail.to.toLowerCase().includes(r.receiver.toLowerCase())) add("Delivered to", r.receiver);
+  add("Received", fullWhen(r.received_at));
+  head.append(meta);
+
+  const verdict = el("div", { class: "verdict" });
+  if (view === "history") verdict.append(el("span", { class: "badge " + r.status }, "You " + r.status + " this"));
+  verdict.append(r.verdict ? el("span", { class: "badge " + r.verdict }, "AI: " + r.verdict + " " + r.confidence + "%") : el("span", { class: "badge none" }, r.classify_error ? "AI failed" : "AI: waiting"),
+    el("span", {}, r.reason || r.classify_error || ""),
+    el("span", { class: "addr", style: "color:var(--muted)" }, "· gateway score " + r.spamlevel + (r.category ? " · " + r.category.replace(/_/g, " ") : "")));
+  head.append(verdict);
+
+  // The AI's view on whether this sender is worth putting on the blocklist.
+  if (r.block_advice && r.verdict === "spam") {
+    const addr = (r.envelope_sender || r.sender_addr || "").toLowerCase().replace(/^<|>$/g, ""), domain = addr.split("@")[1];
+    const what = r.block_advice === "domain" ? "block everything from " + domain : r.block_advice === "address" ? "block " + addr : "don't block this sender";
+    const advice = el("div", { class: "verdict" }, el("strong", {}, "Blocklist:"), el("span", {}, "AI suggests: " + what + "."), el("span", { style: "color:var(--muted)" }, r.block_reason || ""));
+    if (acting && domain && r.block_advice !== "none") advice.append(el("button", { class: "act delete", style: "margin-left:auto",
+      onclick: () => act("delete", [r.id], r.block_advice) }, "Delete + block " + (r.block_advice === "domain" ? "domain" : "address")));
+    head.append(advice);
+  }
+
+  if (error) return pane.replaceChildren(head, el("div", { class: "empty" }, error));
+  if (!data) return pane.replaceChildren(head, el("div", { class: "empty" }, "Loading message…"));
+
+  const mail = data.mail;
+  const chips = el("div", { class: "chips" }, ...authChips(mail));
+  mail.attachments.forEach((a, i) => chips.append(el("a", { class: "badge neutral file", download: a.filename,
+    href: "/api/messages/" + r.id + "/attachments/" + i, title: "Download " + a.filename + " (" + a.contentType + ")" },
+    "📎 " + a.filename + " · " + sizeText(a.size) + " ⤓")));
+  head.append(chips);
+  for (const w of warnings(mail)) head.append(el("div", { class: "alert" }, "⚠ " + w));
+
+  const hasHtml = !!mail.html.trim();
+  const mode = (bodyMode === "formatted" || bodyMode === "source") && !hasHtml ? "text" : bodyMode;
+  const seg = el("div", { class: "seg" });
+  for (const [key, label] of [["formatted", "Formatted"], ["text", "Plain text"], ["source", "HTML source"], ["details", "Links & details"], ["headers", "Headers"]]) {
+    if ((key === "formatted" || key === "source") && !hasHtml) continue;
+    seg.append(el("button", { "aria-pressed": String(mode === key), onclick: () => { bodyMode = key; renderPane(r, data); } }, label));
+  }
+  const bar = el("div", { class: "pbar" }, seg);
+  const remote = (mail.html.match(/<img\b[^>]*\bsrc\s*=\s*["']?https?:/gi) || []).length;
+  const showImgs = imagesOn.has(r.id);
+  if (mode === "formatted" && remote && !showImgs) bar.append(el("button", { class: "act",
+    title: "Fetches the pictures from the sender's servers, which can tell the sender this address is read",
+    onclick: () => { imagesOn.add(r.id); renderPane(r, data); } }, "Show " + remote + " remote image" + (remote > 1 ? "s" : "")));
+  if (mode === "formatted") bar.append(el("span", { class: "note", style: "margin:0" },
+    "Links are switched off" + (remote && !showImgs ? "; remote images are blocked" : "") + "."));
+  bar.append(el("a", { class: "act dl", download: "", href: "/api/messages/" + r.id + "/raw", title: "Download the original message as an .eml file" }, "⤓ Original email"));
+
+  const body = el("div", { class: "pbody" },
+    mode === "formatted" ? frameFor(mail.html, showImgs)
+    : mode === "text" ? el("pre", {}, mail.text || "(no text content)")
+    : mode === "source" ? el("pre", { class: "mono" }, mail.html)
+    : mode === "headers" ? el("pre", { class: "mono" }, data.headers || "(no headers)")
+    : detailsView(data));
+  pane.replaceChildren(head, bar, body);
+}
+
+async function showPane() {
+  const id = current, r = rows.find((x) => x.id === id), token = ++paneToken;
+  if (!r) return renderPane(null);
+  if (contentCache.has(id)) return renderPane(r, contentCache.get(id));
+  renderPane(r, null);
+  try {
+    const data = await api("/api/messages/" + id + "/content");
+    contentCache.set(id, data);
+    if (contentCache.size > 60) contentCache.delete(contentCache.keys().next().value);
+    if (token === paneToken) renderPane(r, data);
+  } catch (err) { if (token === paneToken) renderPane(r, null, err.message); }
+}
+
+/* ---------- actions and loading ---------- */
+
+async function act(action, ids, list) {
+  // Land on the first message after the ones being handled.
+  const gone = new Set(ids), at = indexOf(current);
+  const next = gone.has(current) ? (rows.slice(at + 1).find((r) => !gone.has(r.id)) || [...rows.slice(0, at)].reverse().find((r) => !gone.has(r.id))) : null;
+  try {
+    const { done, listed } = await api("/api/actions", list ? { action, ids, list } : { action, ids });
+    toast(done + " message" + (done > 1 ? "s " : " ") + (action === "release" ? "released to the mailbox" : "deleted") +
+      (listed?.length ? "; " + listed.join(", ") + " is on the " + (action === "release" ? "whitelist" : "blocklist") : ""));
+  } catch (err) { toast(err.message); }
+  if (next) { current = null; setCurrent(next.id, false); }
+  await load();
+  $("list").focus();
+}
+
+async function load() {
+  try {
+    const [list, status] = await Promise.all([api("/api/messages?view=" + view), api("/api/status")]);
+    rows = list.rows;
+    selected = new Set([...selected].filter((id) => rows.some((r) => r.id === id)));
+    if (indexOf(anchor) < 0) anchor = null;
+    const had = current;
+    if (indexOf(current) < 0) current = rows[0]?.id ?? null;
+    for (const v of ["review", "spam", "history"]) $("n-" + v).textContent = status.counts?.[v] ?? "";
+    $("n-review").classList.toggle("some", (status.counts?.review ?? 0) > 0);
+    const s = status.stats, p = status.lastPoll;
+    const pollText = !p ? "No quarantine check yet" : p.error ? "Last check FAILED: " + p.error : "Last check " + shortWhen(p.at);
+    const agree = s.decisions ? " · AI agreed with " + s.agreed + " of " + s.decisions + " decisions, missed " + s.missedLegitimate + " genuine" : "";
+    $("status").textContent = pollText + " · " + status.provider + " / " + status.model + agree;
+    renderList();
+    rowEls.get(current)?.scrollIntoView({ block: "nearest" });
+    if (current !== had || !$("pane").children.length) showPane();
+  } catch (err) { $("status").textContent = err.message; }
+}
+
+document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
+  view = b.dataset.view; selected.clear(); current = anchor = null; $("pane").replaceChildren();
+  document.querySelectorAll(".tabs button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+  load().then(() => $("list").focus());
+}));
+$("all").addEventListener("click", (e) => { selected = new Set(e.target.checked ? rows.map((r) => r.id) : []); paint(); });
+$("bulk-release").addEventListener("click", () => act("release", [...selected]));
+$("bulk-delete").addEventListener("click", () => act("delete", [...selected]));
+$("poll").addEventListener("click", async () => {
+  $("poll").disabled = true;
+  try { const r = await api("/api/poll", {}); toast(r.listed + " in quarantine, " + r.classified + " newly classified"); }
+  catch (err) { toast(err.message); }
+  $("poll").disabled = false; load();
+});
+load().then(() => $("list").focus());
+setInterval(load, 60000);
+</script>
+</body>
+</html>
