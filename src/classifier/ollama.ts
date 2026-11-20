@@ -11,8 +11,9 @@ const FORMAT = {
     reason: { type: "string" },
     block_advice: { type: "string", enum: ["none", "address", "domain"] },
     block_reason: { type: "string" },
+    unsubscribe_link: { type: "number" },
   },
-  required: ["verdict", "confidence", "category", "reason", "block_advice", "block_reason"],
+  required: ["verdict", "confidence", "category", "reason", "block_advice", "block_reason", "unsubscribe_link"],
 };
 
 /** Local model served by Ollama; mail content never leaves the network. */
@@ -43,6 +44,6 @@ export class OllamaClassifier implements Classifier {
     if (!res.ok) throw new Error(`Ollama returned HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     const body = (await res.json()) as { message?: { content?: string } };
     const parsed = VerdictSchema.parse(JSON.parse(body.message?.content ?? ""));
-    return toClassification(parsed, this.provider, this.model);
+    return toClassification(parsed, this.provider, this.model, input.mail);
   }
 }

@@ -49,6 +49,8 @@ export class MemoryStore implements Store {
         reason: null,
         block_advice: null,
         block_reason: null,
+        unsubscribe_url: null,
+        unsubscribe_post: null,
         provider: null,
         model: null,
         classify_error: null,
@@ -64,7 +66,12 @@ export class MemoryStore implements Store {
 
   async unclassified(limit: number): Promise<MessageRow[]> {
     return this.byNewest(
-      this.rows.filter((r) => r.status === "pending" && (r.verdict === null || r.block_advice === null) && r.attempts < 3),
+      this.rows.filter(
+        (r) =>
+          r.status === "pending" &&
+          (r.verdict === null || r.block_advice === null || r.unsubscribe_url === null) &&
+          r.attempts < 3,
+      ),
     ).slice(0, limit);
   }
 

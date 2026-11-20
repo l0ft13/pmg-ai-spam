@@ -79,6 +79,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       .header("Content-Type", "text/html; charset=utf-8")
       .header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: https: http:; font-src data:")
       .header("X-Frame-Options", "DENY")
+      // An unsubscribe page opened from here must not learn where the click came from.
+      .header("Referrer-Policy", "no-referrer")
       .send(page),
   );
 

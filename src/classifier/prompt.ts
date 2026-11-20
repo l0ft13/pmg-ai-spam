@@ -39,7 +39,8 @@ Reply with:
   - "domain": the envelope sender's domain appears to exist only to send this kind of mail, for example a throwaway or lookalike domain, or one whose local part is random and changes per message so that blocking one address would achieve nothing.
   - "address": one fixed address keeps sending this, at a domain that other, unrelated people also use, such as a scammer's mailbox at a free webmail provider or one bad account at a real company.
   - "none": blocking would not help or would do harm. This covers mail that is not spam; senders forging a real organisation's domain, where a block would stop that organisation's genuine mail; a legitimate account that looks compromised; bulk-mail services and bounce addresses that change with every message; and a legitimate company's marketing that staff may have signed up for, where unsubscribing is the better fix.
-  block_reason is one plain sentence, under 150 characters, saying why. When verdict is not "spam", block_advice must be "none".`;
+  block_reason is one plain sentence, under 150 characters, saying why. When verdict is not "spam", block_advice must be "none".
+- unsubscribe_link: the number of the entry in the email's numbered Links list that a recipient would follow to unsubscribe from, or opt out of, this sender's mailings. The administrator is offered an Unsubscribe button that opens that link, so pick it from both the link's visible text and the body text around it; it is often worded differently, such as "manage preferences" or "opt out", or written in another language. Give 0 when no link in the list does this. Also give 0 for phishing, scams and malware, where such a link is bait.`;
 
 function clip(text: string, limit: number): string {
   if (text.length <= limit) return text;
@@ -90,9 +91,10 @@ export function buildUserMessage(input: ClassifyInput): string {
         `Attachments: ${
           mail.attachments.map((a) => `${a.filename} [${a.contentType}, ${a.size} bytes]`).join("; ") || "(none)"
         }`,
+        `List-Unsubscribe: ${mail.listUnsubscribe.join(", ") || "(none)"}`,
         "Links:",
         ...(mail.links.length
-          ? mail.links.map((l) => `  ${l.href}${l.text ? `  (shown as: ${l.text})` : ""}`)
+          ? mail.links.map((l, i) => `  ${i + 1}. ${l.href}${l.text ? `  (shown as: ${l.text})` : ""}`)
           : ["  (none)"]),
         "",
         "Body:",

@@ -15,7 +15,7 @@ export interface Store {
   close(): Promise<void>;
   /** Insert quarantine entries not seen before; known ones are left alone. */
   upsertItems(items: QuarantineItem[]): Promise<void>;
-  /** Pending messages that still need a verdict or blocking advice (fewer than 3 attempts). */
+  /** Pending messages that still need a verdict, blocking advice or an unsubscribe lookup (fewer than 3 attempts). */
   unclassified(limit: number): Promise<MessageRow[]>;
   saveClassification(id: number, c: Classification): Promise<void>;
   saveClassifyError(id: number, error: string): Promise<void>;

@@ -30,6 +30,10 @@ export interface Classification {
   reason: string;
   block_advice: BlockAdvice;
   block_reason: string;
+  /** Where to unsubscribe from this sender; empty when the mail offers nothing usable. */
+  unsubscribe_url: string;
+  /** The address takes a one-click POST (RFC 8058) rather than a visit. */
+  unsubscribe_post: boolean;
   provider: string;
   model: string;
 }
@@ -52,6 +56,9 @@ export interface MessageRow {
   reason: string | null;
   block_advice: BlockAdvice | null;
   block_reason: string | null;
+  unsubscribe_url: string | null;
+  /** MySQL hands this back as 0 or 1. */
+  unsubscribe_post: boolean | number | null;
   provider: string | null;
   model: string | null;
   classify_error: string | null;

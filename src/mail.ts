@@ -19,10 +19,16 @@ export interface ParsedMail {
   /** The HTML part, untouched and untrusted. Empty for plain-text mail. */
   html: string;
   links: MailLink[];
+  /** The http(s) and mailto addresses the sender's List-Unsubscribe header offers. */
+  listUnsubscribe: string[];
+  /** The sender accepts a one-click unsubscribe POST (RFC 8058) to its https address. */
+  oneClickUnsubscribe: boolean;
   attachments: { filename: string; contentType: string; size: number }[];
 }
 
 const MAX_LINKS = 40;
+/** Unsubscribe links sit at the foot of a mail, so the last few links are kept when a long list is cut. */
+const TAIL_LINKS = 10;
 
 function headerText(value: unknown): string {
   if (value == null) return "";
@@ -53,13 +59,21 @@ function extractLinks(html: string, text: string): MailLink[] {
     const clean = href.trim();
     if (!/^(https?:|mailto:|tel:)/i.test(clean) || seen.has(clean)) return;
     seen.add(clean);
-    if (links.length < MAX_LINKS) links.push({ href: clean, text: label || undefined });
+    links.push({ href: clean, text: label || undefined });
   };
   for (const m of html.matchAll(/<a\b[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
     add(m[1]!.replace(/&amp;/g, "&"), stripTags(m[2] ?? "").slice(0, 120));
   }
   for (const m of text.matchAll(/https?:\/\/[^\s<>"')\]]+/gi)) add(m[0]);
-  return links;
+  if (links.length <= MAX_LINKS) return links;
+  return [...links.slice(0, MAX_LINKS - TAIL_LINKS), ...links.slice(-TAIL_LINKS)];
+}
+
+/** The addresses inside a raw "List-Unsubscribe: <https://...>, <mailto:...>" header line. */
+function unsubscribeTargets(line: string): string[] {
+  return [...line.replace(/^[^:]*:/, "").matchAll(/<([^<>]+)>/g)]
+    .map((m) => m[1]!.replace(/\s+/g, "")) // folding can split a long address
+    .filter((u) => /^(https?:|mailto:)/i.test(u));
 }
 
 /** Parse a raw RFC 822 message into the parts the classifier and the preview use. */
@@ -69,6 +83,7 @@ export async function parseMail(raw: string, opts: { inlineImages?: boolean } = 
   const html = typeof mail.html === "string" ? mail.html : "";
   const text = (mail.text ?? stripTags(html)).replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   const h = mail.headers;
+  const rawHeader = (key: string) => mail.headerLines.find((l) => l.key === key)?.line ?? "";
   return {
     from: headerText(h.get("from")),
     to: headerText(h.get("to")),
@@ -81,6 +96,8 @@ export async function parseMail(raw: string, opts: { inlineImages?: boolean } = 
     text,
     html,
     links: extractLinks(html, text),
+    listUnsubscribe: unsubscribeTargets(rawHeader("list-unsubscribe")),
+    oneClickUnsubscribe: /one-click/i.test(rawHeader("list-unsubscribe-post")),
     attachments: mail.attachments.map((a) => ({
       filename: a.filename ?? "(unnamed)",
       contentType: a.contentType,

@@ -31,6 +31,8 @@ const SCHEMA = [
     reason VARCHAR(500) NULL,
     block_advice ENUM('none','address','domain') NULL,
     block_reason VARCHAR(300) NULL,
+    unsubscribe_url VARCHAR(2000) NULL,
+    unsubscribe_post TINYINT(1) NULL,
     provider VARCHAR(20) NULL,
     model VARCHAR(80) NULL,
     classify_error VARCHAR(500) NULL,
@@ -81,6 +83,8 @@ export class MysqlStore implements Store {
     // Columns added after the first release; older databases get them here.
     await this.addColumn("messages", "block_advice", "ENUM('none','address','domain') NULL AFTER reason");
     await this.addColumn("messages", "block_reason", "VARCHAR(300) NULL AFTER block_advice");
+    await this.addColumn("messages", "unsubscribe_url", "VARCHAR(2000) NULL AFTER block_reason");
+    await this.addColumn("messages", "unsubscribe_post", "TINYINT(1) NULL AFTER unsubscribe_url");
   }
 
   private async addColumn(table: string, column: string, definition: string): Promise<void> {
@@ -123,7 +127,8 @@ export class MysqlStore implements Store {
   async unclassified(limit: number): Promise<MessageRow[]> {
     const [rows] = await this.pool.query<RowDataPacket[]>(
       `SELECT * FROM messages
-        WHERE status = 'pending' AND (verdict IS NULL OR block_advice IS NULL) AND attempts < 3
+        WHERE status = 'pending' AND (verdict IS NULL OR block_advice IS NULL OR unsubscribe_url IS NULL)
+          AND attempts < 3
         ORDER BY received_at DESC LIMIT ?`,
       [limit],
     );
@@ -134,10 +139,13 @@ export class MysqlStore implements Store {
     await this.pool.query(
       `UPDATE messages
           SET verdict = ?, confidence = ?, category = ?, reason = ?, block_advice = ?, block_reason = ?,
-              provider = ?, model = ?,
+              unsubscribe_url = ?, unsubscribe_post = ?, provider = ?, model = ?,
               classify_error = NULL, attempts = attempts + 1
         WHERE id = ?`,
-      [c.verdict, c.confidence, c.category, c.reason, c.block_advice, c.block_reason, c.provider, c.model, id],
+      [
+        c.verdict, c.confidence, c.category, c.reason, c.block_advice, c.block_reason,
+        c.unsubscribe_url, c.unsubscribe_post, c.provider, c.model, id,
+      ],
     );
   }
 

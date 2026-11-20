@@ -22,14 +22,15 @@ export class AnthropicClassifier implements Classifier {
     // A declined request must never hide a message: send it to review.
     if (response.stop_reason === "refusal") {
       return toClassification(
-        { verdict: "unsure", confidence: 0, category: "other", reason: "The AI declined to assess this message.", block_advice: "none", block_reason: "" },
+        { verdict: "unsure", confidence: 0, category: "other", reason: "The AI declined to assess this message.", block_advice: "none", block_reason: "", unsubscribe_link: 0 },
         this.provider,
         this.model,
+        input.mail,
       );
     }
     if (!response.parsed_output) {
       throw new Error(`No structured verdict returned (stop_reason: ${response.stop_reason})`);
     }
-    return toClassification(response.parsed_output, this.provider, this.model);
+    return toClassification(response.parsed_output, this.provider, this.model, input.mail);
   }
 }

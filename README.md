@@ -19,6 +19,8 @@ verdicts. Deleting from the review screen is immediate, with no confirmation.
 2. New messages are fetched in full and parsed: headers, SPF/DKIM/DMARC results,
    text body, real link targets against their visible text, attachment names.
 3. The model returns a verdict, a confidence (0-100), a category and a one-line reason.
+   It also says whether the sender is worth blocklisting and which link in the
+   mail, if any, unsubscribes from it.
 4. The review screen splits pending mail into:
    - **Needs review**: genuine, unsure, low-confidence spam, and anything the AI failed on.
    - **Obvious spam**: spam at or above `SPAM_HIDE_CONFIDENCE`. Left to expire in PMG.
@@ -103,6 +105,15 @@ in-RAM store and no AI. Sign in with `demo` / `demo-password`.
 - "Release + whitelist" and "Delete + blocklist" change PMG's system-wide
   Welcomelist and Blocklist, so the PMG user then needs the Administrator role.
   Whole-domain entries are refused for shared domains such as gmail.com.
+- "Unsubscribe + delete" is the one place a link from a quarantined mail is
+  followed: it opens in a new tab of your own browser (the server never fetches
+  it), with no referrer, and the message is then deleted. The address is the
+  sender's `List-Unsubscribe` header (sent as a one-click request when the sender
+  supports that) or a link from the body that the model picked by its number, so
+  the model cannot supply an address of its own. The button is not offered for
+  mail categorised as phishing, scam or malware. Hover over it to see which site
+  it goes to. Unsubscribing tells the sender the address is read, so keep it for
+  real mailing lists and delete or block outright spam instead.
 - Mail content is hostile input. The model is told to treat it as data, can only
   return a fixed verdict structure, and cannot trigger any action.
 - Only metadata, verdicts and decisions are stored in the database. Bodies are
@@ -124,5 +135,5 @@ npm run dev
 
 The tests run against a mock PMG. Reading the quarantine and decoding mail have
 also been checked against a real PMG. Writing to the real Welcomelist and
-Blocklist, the Ollama provider, and the blocking advice from a real model have
-not been checked yet.
+Blocklist, the Ollama provider, and the blocking advice and unsubscribe link
+choice from a real model have not been checked yet.

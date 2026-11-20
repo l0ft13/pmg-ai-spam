@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startMockPmg, type MockPmg } from "../scripts/mock-pmg.js";
 import { HeuristicClassifier } from "../src/classifier/heuristic.js";
 import { buildUserMessage } from "../src/classifier/prompt.js";
-import { toClassification } from "../src/classifier/schema.js";
+import { pickUnsubscribe, toClassification } from "../src/classifier/schema.js";
 import { parseMail, senderAddress } from "../src/mail.js";
 import { joinMessage, PmgClient } from "../src/pmg.js";
 import { Poller } from "../src/poller.js";
@@ -80,11 +80,52 @@ describe("rebuilding the raw message from PMG", () => {
 });
 
 describe("blocking advice", () => {
-  it("is dropped unless the verdict is spam", () => {
-    const raw = { confidence: 80, category: "other" as const, reason: "r", block_advice: "domain" as const, block_reason: "b" };
-    expect(toClassification({ ...raw, verdict: "spam" }, "p", "m").block_advice).toBe("domain");
-    expect(toClassification({ ...raw, verdict: "unsure" }, "p", "m").block_advice).toBe("none");
-    expect(toClassification({ ...raw, verdict: "legitimate" }, "p", "m").block_advice).toBe("none");
+  it("is dropped unless the verdict is spam", async () => {
+    const raw = { confidence: 80, category: "other" as const, reason: "r", block_advice: "domain" as const, block_reason: "b", unsubscribe_link: 0 };
+    const mail = await parseMail("From: a@b.test\r\nSubject: x\r\n\r\nHello");
+    expect(toClassification({ ...raw, verdict: "spam" }, "p", "m", mail).block_advice).toBe("domain");
+    expect(toClassification({ ...raw, verdict: "unsure" }, "p", "m", mail).block_advice).toBe("none");
+    expect(toClassification({ ...raw, verdict: "legitimate" }, "p", "m", mail).block_advice).toBe("none");
+  });
+});
+
+describe("unsubscribe link", () => {
+  const links = [{ href: "https://shop.test/sale" }, { href: "https://shop.test/prefs?u=1", text: "Manage preferences" }, { href: "mailto:x@shop.test" }];
+  const mail = { links, listUnsubscribe: [] as string[], oneClickUnsubscribe: false };
+  const none = { unsubscribe_url: "", unsubscribe_post: false };
+
+  it("reads the List-Unsubscribe header, folded or not", async () => {
+    const parsed = await parseMail((await pmg.getContent("C1R103T1003")).content);
+    expect(parsed.listUnsubscribe).toEqual(["mailto:leave@bulk-offers.test", "https://bulk-offers.test/unsubscribe?u=4471"]);
+    expect(parsed.oneClickUnsubscribe).toBe(true);
+  });
+
+  it("keeps the links at the foot of a long mail", async () => {
+    const body = Array.from({ length: 60 }, (_, i) => `https://shop.test/p/${i}`).join("\n") + "\nhttps://shop.test/unsubscribe";
+    const parsed = await parseMail("From: a@b.test\r\nSubject: x\r\n\r\n" + body);
+    expect(parsed.links).toHaveLength(40);
+    expect(parsed.links.at(-1)!.href).toBe("https://shop.test/unsubscribe");
+  });
+
+  it("uses the link the model pointed at, by number only", () => {
+    expect(pickUnsubscribe({ category: "newsletter", unsubscribe_link: 2 }, mail)).toEqual({ unsubscribe_url: "https://shop.test/prefs?u=1", unsubscribe_post: false });
+    expect(pickUnsubscribe({ category: "newsletter", unsubscribe_link: 0 }, mail)).toEqual(none);
+    expect(pickUnsubscribe({ category: "newsletter", unsubscribe_link: 3 }, mail)).toEqual(none); // mailto
+    expect(pickUnsubscribe({ category: "newsletter", unsubscribe_link: 99 }, mail)).toEqual(none);
+  });
+
+  it("prefers a one-click header and falls back to a plain header address", () => {
+    const header = { ...mail, listUnsubscribe: ["mailto:u@shop.test", "https://shop.test/oc"] };
+    expect(pickUnsubscribe({ category: "newsletter", unsubscribe_link: 2 }, { ...header, oneClickUnsubscribe: true })).toEqual({ unsubscribe_url: "https://shop.test/oc", unsubscribe_post: true });
+    expect(pickUnsubscribe({ category: "newsletter", unsubscribe_link: 2 }, header).unsubscribe_url).toBe("https://shop.test/prefs?u=1");
+    expect(pickUnsubscribe({ category: "newsletter", unsubscribe_link: 0 }, header)).toEqual({ unsubscribe_url: "https://shop.test/oc", unsubscribe_post: false });
+  });
+
+  it("is never offered for phishing, scams or malware", () => {
+    const header = { ...mail, listUnsubscribe: ["https://shop.test/oc"], oneClickUnsubscribe: true };
+    for (const category of ["phishing", "scam", "malware"] as const) {
+      expect(pickUnsubscribe({ category, unsubscribe_link: 2 }, header)).toEqual(none);
+    }
   });
 });
 
@@ -123,6 +164,9 @@ describe("poll, review and act", () => {
     const review = (await app.inject({ url: "/api/messages?view=review", headers: { authorization: AUTH } })).json();
     const spam = (await app.inject({ url: "/api/messages?view=spam", headers: { authorization: AUTH } })).json();
     expect(spam.rows.map((r: { pmg_id: string }) => r.pmg_id).sort()).toEqual(["C1R101T1001", "C1R103T1003"]);
+    const bulk = spam.rows.find((r: { pmg_id: string }) => r.pmg_id === "C1R103T1003");
+    expect(bulk).toMatchObject({ unsubscribe_url: "https://bulk-offers.test/unsubscribe?u=4471", unsubscribe_post: true });
+    expect(review.rows.every((r: { unsubscribe_url: string }) => r.unsubscribe_url === "")).toBe(true);
     const status = (await app.inject({ url: "/api/status", headers: { authorization: AUTH } })).json();
     expect(status.counts).toEqual({ review: 2, spam: 2, history: 0 });
     expect(review.rows.map((r: { pmg_id: string }) => r.pmg_id).sort()).toEqual(["C1R102T1002", "C1R104T1004"]);

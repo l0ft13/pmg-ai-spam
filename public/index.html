@@ -64,7 +64,7 @@
   .phead h2 { font-size: 18px; margin: 0 0 8px; overflow-wrap: anywhere; }
   .ptop { display: flex; gap: 12px; align-items: flex-start; }
   .ptop .grow { flex: 1; min-width: 0; }
-  .pacts { display: flex; gap: 6px; align-items: flex-start; }
+  .pacts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; align-items: flex-start; max-width: 60%; }
   .pacts details.menu { position: relative; margin-left: -4px; }
   .menu summary { list-style: none; display: block; padding: 5px 8px; border-radius: 5px; border: 1px solid; cursor: pointer; user-select: none; }
   .menu summary::-webkit-details-marker { display: none; }
@@ -352,10 +352,25 @@ function listMenu(r, action) {
 }
 document.addEventListener("click", (e) => document.querySelectorAll("details.menu[open]").forEach((m) => { if (!m.contains(e.target)) m.open = false; }));
 
+/** Follow the message's unsubscribe link in a new tab, then delete the message. */
+function unsubscribe(r) {
+  // Opened before anything is awaited, or the browser treats the new tab as a pop-up.
+  if (r.unsubscribe_post) {
+    // RFC 8058 one-click: the sender expects exactly this POST and asks nothing further.
+    const form = el("form", { method: "post", action: r.unsubscribe_url, target: "_blank", rel: "noopener noreferrer", hidden: true },
+      el("input", { type: "hidden", name: "List-Unsubscribe", value: "One-Click" }));
+    document.body.append(form); form.submit(); form.remove();
+  } else window.open(r.unsubscribe_url, "_blank", "noopener,noreferrer");
+  act("delete", [r.id]);
+}
+
 function renderPane(r, data, error) {
   const pane = $("pane");
   if (!r) return pane.replaceChildren(el("div", { class: "empty" }, rows.length ? "Choose a message to read it." : ""));
   const from = splitFrom(r.from_header), acting = view !== "history";
+  // PMG's rules match the envelope sender, which can differ from the From shown.
+  const addr = (r.envelope_sender || r.sender_addr || "").toLowerCase().replace(/^<|>$/g, ""), domain = addr.split("@")[1];
+  const blockable = r.verdict === "spam" && domain && r.block_advice && r.block_advice !== "none";
   const head = el("div", { class: "phead" },
     el("div", { class: "ptop" },
       el("div", { class: "grow" }, el("h2", {}, r.subject || "(no subject)")),
@@ -363,7 +378,14 @@ function renderPane(r, data, error) {
         el("button", { class: "act release", onclick: () => act("release", [r.id]) }, "Release"),
         listMenu(r, "release"),
         el("button", { class: "act delete", onclick: () => act("delete", [r.id]) }, "Delete"),
-        listMenu(r, "delete")) : null));
+        listMenu(r, "delete"),
+        blockable ? el("button", { class: "act delete",
+          title: "AI suggests: delete this and block " + (r.block_advice === "domain" ? "everything from " + domain : addr),
+          onclick: () => act("delete", [r.id], r.block_advice) }, "★ Delete + block " + r.block_advice) : null,
+        r.unsubscribe_url ? el("button", { class: "act",
+          title: (r.unsubscribe_post ? "Sends the sender's one-click unsubscribe request to " : "Opens the unsubscribe page at ") +
+            hostOf(r.unsubscribe_url) + " in a new tab, then deletes this message",
+          onclick: () => unsubscribe(r) }, "Unsubscribe + delete") : null) : null));
   const meta = el("dl", { class: "meta" });
   const add = (k, ...v) => meta.append(el("dt", {}, k), el("dd", {}, ...v));
   add("From", el("strong", {}, from.name), from.addr ? el("span", { class: "addr" }, "  <" + from.addr + ">") : null);
@@ -382,12 +404,8 @@ function renderPane(r, data, error) {
 
   // The AI's view on whether this sender is worth putting on the blocklist.
   if (r.block_advice && r.verdict === "spam") {
-    const addr = (r.envelope_sender || r.sender_addr || "").toLowerCase().replace(/^<|>$/g, ""), domain = addr.split("@")[1];
     const what = r.block_advice === "domain" ? "block everything from " + domain : r.block_advice === "address" ? "block " + addr : "don't block this sender";
-    const advice = el("div", { class: "verdict" }, el("strong", {}, "Blocklist:"), el("span", {}, "AI suggests: " + what + "."), el("span", { style: "color:var(--muted)" }, r.block_reason || ""));
-    if (acting && domain && r.block_advice !== "none") advice.append(el("button", { class: "act delete", style: "margin-left:auto",
-      onclick: () => act("delete", [r.id], r.block_advice) }, "Delete + block " + (r.block_advice === "domain" ? "domain" : "address")));
-    head.append(advice);
+    head.append(el("div", { class: "verdict" }, el("strong", {}, "Blocklist:"), el("span", {}, "AI suggests: " + what + "."), el("span", { style: "color:var(--muted)" }, r.block_reason || "")));
   }
 
   if (error) return pane.replaceChildren(head, el("div", { class: "empty" }, error));
