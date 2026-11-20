@@ -27,6 +27,15 @@ verdicts. Deleting from the review screen is immediate, with no confirmation.
    - **History**: what you released or deleted, with what the AI said at the time.
 5. Your recent decisions and each sender's release/delete history are fed back
    into later classifications, so it learns what your organisation wants.
+6. Mail that arrives as a wave is shown as one row ("×20") and one Release or
+   Delete handles all of it. Messages are grouped when they share a sender name
+   (the sender's domain when there is no name), a subject and an AI verdict;
+   the sending address, numbers and the recipient's own name in the subject are
+   ignored. Untick "Group similar" to handle them one by one.
+7. Every decision is remembered against that sender name and subject. When mail
+   like it turns up again, the list marks it "deleted before" or "released
+   before", the message shows how many and when, and the model is told too.
+   Nothing is acted on for you: the earlier decision is shown, not repeated.
 
 ## Setup
 
@@ -88,7 +97,7 @@ Switching provider only affects mail classified afterwards.
 npm run demo
 ```
 
-This runs the app against a built-in mock PMG with four made-up messages, an
+This runs the app against a built-in mock PMG with seven made-up messages, an
 in-RAM store and no AI. Sign in with `demo` / `demo-password`.
 
 ## Security notes

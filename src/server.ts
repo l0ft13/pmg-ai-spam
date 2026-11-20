@@ -86,7 +86,10 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   app.get("/api/messages", async (req) => {
     const view = z.enum(["review", "spam", "history"]).catch("review").parse((req.query as { view?: string }).view);
-    return { rows: await deps.store.list(view as View, deps.spamHideConfidence) };
+    const rows = await deps.store.list(view as View, deps.spamHideConfidence);
+    // What was decided before about mail like each pending message, so the same call can be made again.
+    const keys = view === "history" ? [] : [...new Set(rows.flatMap((r) => (r.group_key ? [r.group_key] : [])))];
+    return { rows, similar: await deps.store.groupHistory(keys) };
   });
 
   app.get("/api/status", async () => ({

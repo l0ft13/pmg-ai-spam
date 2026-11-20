@@ -76,6 +76,19 @@ const MAILS: MockMail[] = [
     text: "Waybill 88213 was collected at 14:02 and is in transit to Durban.",
     rules: [["BAYES_80", 3.0], ["NO_REAL_NAME", 1.5]],
   },
+  // One wave: the same mail to three people, each from a different address.
+  ...(["sarah", "accounts", "info"] as const).map((name, i): MockMail => ({
+    id: `C1R${105 + i}T${1005 + i}`,
+    receiver: `${name}@example-co.test`,
+    envelope_sender: `bounce-${4410 + i}@mx${i + 1}.lotto-claims.test`,
+    from: `"Prize Draw Office" <claims${i + 1}@lotto-claims.test>`,
+    subject: `${name}, you have won R250000 - ref ${88120 + i * 7}`,
+    spamlevel: 12.4,
+    ageHours: 1,
+    headers: ["Authentication-Results: mx.example-co.test; spf=softfail; dkim=none; dmarc=fail"],
+    text: `Dear ${name}, your address was drawn. Reply with your banking details to claim R250000.`,
+    rules: [["BAYES_99", 5.0], ["LOTTO_DEPT", 4.2], ["SPF_SOFTFAIL", 1.0]],
+  })),
 ];
 
 function raw(m: MockMail): string {

@@ -79,9 +79,10 @@ export class Poller {
     const { pmg, store, classifier, bodyCharLimit } = this.deps;
     const content = await pmg.getContent(row.pmg_id);
     const mail = await parseMail(content.content);
-    const [senderHistory, pastDecisions] = await Promise.all([
+    const [senderHistory, pastDecisions, similar] = await Promise.all([
       store.senderHistory(row.sender_addr),
       store.recentDecisions(PAST_DECISIONS),
+      store.groupHistory(row.group_key ? [row.group_key] : []),
     ]);
     const verdict = await classifier.classify({
       item: {
@@ -97,6 +98,7 @@ export class Poller {
       mail,
       rules: content.spaminfo,
       senderHistory,
+      similarHistory: similar[row.group_key ?? ""] ?? { released: 0, deleted: 0, last_at: null },
       pastDecisions,
       bodyCharLimit,
     });

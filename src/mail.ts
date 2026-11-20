@@ -116,6 +116,25 @@ export async function getAttachment(
   return a ? { filename: a.filename ?? `attachment-${index + 1}`, content: a.content } : undefined;
 }
 
+/**
+ * What the messages of one wave have in common: who they claim to be from and
+ * their subject, with the parts that change per recipient (the recipient's own
+ * name, numbers, reference codes) taken out. Empty when there is nothing to go on.
+ */
+export function groupKey(from: string, subject: string, receiver: string): string {
+  const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  // The display name rather than the address, which a wave often changes per message.
+  const name = words(from.replace(/<[^<>]*>/g, " ").replace(/\S+@\S+/g, " ")).join(" ");
+  const who = name || senderAddress(from).split("@")[1] || "";
+  const to = receiver.toLowerCase();
+  const own = new Set(words(to.split("@")[0] ?? ""));
+  const subj = words(to ? subject.toLowerCase().split(to).join(" ") : subject)
+    .filter((w) => !own.has(w))
+    .map((w) => (/\p{N}/u.test(w) ? "#" : w))
+    .join(" ");
+  return who || subj ? `${who}|${subj}`.slice(0, 190) : "";
+}
+
 /** The bare address out of a From header, lower-cased. */
 export function senderAddress(from: string): string {
   const angle = from.match(/<([^<>\s]+@[^<>\s]+)>/);

@@ -45,6 +45,8 @@ export interface MessageRow {
   envelope_sender: string;
   from_header: string;
   sender_addr: string;
+  /** Shared by the messages of one wave; see groupKey. Null when there was nothing to group on. */
+  group_key: string | null;
   subject: string;
   received_at: Date;
   spamlevel: number;
@@ -76,6 +78,11 @@ export interface PastDecision {
 export interface SenderHistory {
   released: number;
   deleted: number;
+}
+
+/** What a person decided earlier about mail with the same group key. */
+export interface SimilarHistory extends SenderHistory {
+  last_at: Date | null;
 }
 
 export interface Stats {

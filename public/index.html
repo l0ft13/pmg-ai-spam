@@ -39,6 +39,8 @@
   .left { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
   .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
   .bar label { display: flex; gap: 6px; align-items: center; color: var(--muted); margin-right: auto; }
+  .bar label.opt { margin-right: 0; white-space: nowrap; }
+  .badge.count { background: var(--line); color: var(--text); }
   #list { flex: 1; overflow-y: auto; outline: none; }
   #list:focus-visible .row.current { box-shadow: inset 3px 0 0 var(--accent); }
   .row { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: default; user-select: none; }
@@ -116,6 +118,7 @@
   <section class="left">
     <div class="bar">
       <label><input type="checkbox" id="all"> <span id="count"></span></label>
+      <label class="opt" title="Show mail with the same sender name and subject as one row, so one action handles all of it"><input type="checkbox" id="grouping" checked> Group similar</label>
       <button class="act release" id="bulk-release" disabled>Release</button>
       <button class="act delete" id="bulk-delete" disabled>Delete</button>
     </div>
@@ -127,7 +130,9 @@
 <div id="toast" role="status"></div>
 <script>
 const EMPTY = { review: "Nothing needs review.", spam: "No obvious spam is waiting.", history: "No decisions recorded yet." };
-let view = "review", rows = [], selected = new Set(), current = null, anchor = null, bodyMode = "formatted";
+// raw is every message in this view; rows is what the list shows, where one row can stand for a group of them.
+let view = "review", raw = [], rows = [], similar = {}, grouping = true, selected = new Set(), current = null, anchor = null, bodyMode = "formatted";
+try { grouping = localStorage.getItem("grouping") !== "0"; } catch {}
 const rowEls = new Map(), contentCache = new Map();
 let paneTimer = null, paneToken = 0;
 const $ = (id) => document.getElementById(id);
@@ -181,6 +186,47 @@ function badge(r) {
   return el("span", { class: "badge " + r.verdict }, r.verdict + " " + r.confidence + "%");
 }
 
+/* ---------- groups ---------- */
+
+/** Fold the messages of one wave into a single row, standing where its newest message was. */
+function groupRows(all) {
+  const out = [], byKey = new Map();
+  for (const r of all) {
+    // Never across verdicts: a genuine message must not ride along with look-alike spam.
+    const key = grouping && view !== "history" && r.group_key ? r.group_key + "|" + (r.verdict || "") : null;
+    const row = key && byKey.get(key);
+    if (row) { row.group.push(r); continue; }
+    const made = { ...r, group: [r] };
+    if (key) byKey.set(key, made);
+    out.push(made);
+  }
+  return out;
+}
+
+/** The messages behind the given rows: what an action is really applied to. */
+const expand = (ids) => ids.flatMap((id) => rows.find((r) => r.id === id)?.group.map((x) => x.id) ?? [id]);
+
+/** The envelope senders behind a row. PMG's rules match these, and they can differ from the From shown. */
+function senders(r) {
+  const clean = (x) => (x.envelope_sender || x.sender_addr || "").toLowerCase().replace(/^<|>$/g, "");
+  const addrs = new Set(r.group.map(clean)), domains = new Set([...addrs].map((a) => a.split("@")[1]));
+  const addr = clean(r), domain = addr.split("@")[1];
+  return { addr, domain, addrs,
+    addrText: addrs.size > 1 ? "all " + addrs.size + " sender addresses" : addr,
+    domainText: "everything from " + (domains.size > 1 ? domains.size + " domains" : domain) };
+}
+
+/** What you decided earlier about mail like this, if anything. */
+function precedent(r) {
+  const s = similar[r.group_key];
+  if (!s || !(s.released + s.deleted)) return null;
+  const when = s.last_at ? ", most recently on " + new Date(s.last_at).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "";
+  const n = (k) => s[k] + " message" + (s[k] === 1 ? "" : "s");
+  if (!s.released) return { cls: "deleted", short: "deleted before", text: "You deleted " + n("deleted") + " like this" + when + "." };
+  if (!s.deleted) return { cls: "released", short: "released before", text: "You released " + n("released") + " like this" + when + "." };
+  return { cls: "unsure", short: "mixed before", text: "Of earlier mail like this you released " + s.released + " and deleted " + s.deleted + when + "." };
+}
+
 /* ---------- list ---------- */
 
 function renderList() {
@@ -188,15 +234,19 @@ function renderList() {
   if (!rows.length) list.append(el("div", { class: "empty" }, EMPTY[view]));
   const acting = view !== "history";
   for (const r of rows) {
+    const n = r.group.length, p = precedent(r);
     const box = el("input", { type: "checkbox", tabIndex: -1, disabled: !acting, "aria-label": "Tick message",
       onclick: (e) => { e.stopPropagation(); pick(r.id, e.shiftKey, true); $("list").focus(); } });
     const node = el("div", { class: "row", id: "row-" + r.id, role: "option",
       onclick: (e) => { setCurrent(r.id, false); if (e.shiftKey) range(r.id); else if (e.ctrlKey || e.metaKey) pick(r.id, false, true); else anchor = r.id; paint(); } },
       box,
       el("div", { style: "min-width:0" },
-        el("div", { class: "top" }, el("span", { class: "who" }, splitFrom(r.from_header).name), el("span", { class: "when" }, shortWhen(r.received_at))),
+        el("div", { class: "top" }, el("span", { class: "who" }, splitFrom(r.from_header).name),
+          n > 1 ? el("span", { class: "badge count", title: n + " similar messages, handled together" }, "×" + n) : null,
+          el("span", { class: "when" }, shortWhen(r.received_at))),
         el("div", { class: "subj" }, r.subject || "(no subject)"),
-        el("div", { class: "why" }, badge(r), el("span", {}, r.reason || r.classify_error || ""))));
+        el("div", { class: "why" }, badge(r), p ? el("span", { class: "badge " + p.cls, title: p.text }, "↺ " + p.short) : null,
+          el("span", {}, r.reason || r.classify_error || ""))));
     node.box = box; rowEls.set(r.id, node); list.append(node);
   }
   paint();
@@ -211,14 +261,15 @@ function paint() {
     node.box.checked = selected.has(id);
   }
   $("list").setAttribute("aria-activedescendant", current != null ? "row-" + current : "");
-  const acting = view !== "history", n = selected.size;
+  const acting = view !== "history", n = selected.size, msgs = expand([...selected]).length;
   $("all").disabled = !acting || !rows.length;
   $("all").checked = rows.length > 0 && n === rows.length;
   $("all").indeterminate = n > 0 && n < rows.length;
-  $("count").textContent = n ? n + " of " + rows.length + " ticked" : rows.length + " message" + (rows.length === 1 ? "" : "s");
+  $("count").textContent = n ? msgs + " of " + raw.length + " ticked"
+    : raw.length + " message" + (raw.length === 1 ? "" : "s") + (rows.length < raw.length ? " in " + rows.length + " rows" : "");
   $("bulk-release").disabled = $("bulk-delete").disabled = !acting || n === 0;
-  $("bulk-release").textContent = "Release" + (n ? " " + n : "");
-  $("bulk-delete").textContent = "Delete" + (n ? " " + n : "");
+  $("bulk-release").textContent = "Release" + (n ? " " + msgs : "");
+  $("bulk-delete").textContent = "Delete" + (n ? " " + msgs : "");
 }
 
 const indexOf = (id) => rows.findIndex((r) => r.id === id);
@@ -334,9 +385,7 @@ function detailsView(data) {
 
 /** The "▾" beside Release / Delete: do it and also list the sender in PMG. */
 function listMenu(r, action) {
-  // PMG's rules match the envelope sender, which can differ from the From shown.
-  const addr = (r.envelope_sender || r.sender_addr || "").toLowerCase().replace(/^<|>$/g, "");
-  const domain = addr.split("@")[1];
+  const { domain, addrText, domainText } = senders(r);
   const verb = action === "release" ? "Release + whitelist " : "Delete + blocklist ";
   const menu = el("details", { class: "menu" }, el("summary", { class: "act " + action, title: verb.trim() + " the sender", "aria-label": verb.trim() + " the sender" }, "▾"));
   const items = el("div", { class: "items" });
@@ -344,8 +393,8 @@ function listMenu(r, action) {
   else {
     const star = (kind) => (action === "delete" && r.verdict === "spam" && r.block_advice === kind ? "  ★ AI suggests" : "");
     items.append(
-      el("button", { class: "act", onclick: () => { menu.open = false; act(action, [r.id], "address"); } }, verb + addr + star("address")),
-      el("button", { class: "act", onclick: () => { menu.open = false; act(action, [r.id], "domain"); } }, verb + "everything from " + domain + star("domain")));
+      el("button", { class: "act", onclick: () => { menu.open = false; act(action, [r.id], "address"); } }, verb + addrText + star("address")),
+      el("button", { class: "act", onclick: () => { menu.open = false; act(action, [r.id], "domain"); } }, verb + domainText + star("domain")));
   }
   menu.append(items);
   return menu;
@@ -368,21 +417,22 @@ function renderPane(r, data, error) {
   const pane = $("pane");
   if (!r) return pane.replaceChildren(el("div", { class: "empty" }, rows.length ? "Choose a message to read it." : ""));
   const from = splitFrom(r.from_header), acting = view !== "history";
-  // PMG's rules match the envelope sender, which can differ from the From shown.
-  const addr = (r.envelope_sender || r.sender_addr || "").toLowerCase().replace(/^<|>$/g, ""), domain = addr.split("@")[1];
+  const { addr, domain, addrs, addrText, domainText } = senders(r);
+  const n = r.group.length, all = n > 1 ? " all " + n : "";
   const blockable = r.verdict === "spam" && domain && r.block_advice && r.block_advice !== "none";
   const head = el("div", { class: "phead" },
     el("div", { class: "ptop" },
       el("div", { class: "grow" }, el("h2", {}, r.subject || "(no subject)")),
       acting ? el("div", { class: "pacts" },
-        el("button", { class: "act release", onclick: () => act("release", [r.id]) }, "Release"),
+        el("button", { class: "act release", onclick: () => act("release", [r.id]) }, "Release" + all),
         listMenu(r, "release"),
-        el("button", { class: "act delete", onclick: () => act("delete", [r.id]) }, "Delete"),
+        el("button", { class: "act delete", onclick: () => act("delete", [r.id]) }, "Delete" + all),
         listMenu(r, "delete"),
         blockable ? el("button", { class: "act delete",
-          title: "AI suggests: delete this and block " + (r.block_advice === "domain" ? "everything from " + domain : addr),
+          title: "AI suggests: delete" + (all || " this") + " and block " + (r.block_advice === "domain" ? domainText : addrText),
           onclick: () => act("delete", [r.id], r.block_advice) }, "★ Delete + block " + r.block_advice) : null,
-        r.unsubscribe_url ? el("button", { class: "act",
+        // An unsubscribe link belongs to one recipient, so it is only offered message by message.
+        r.unsubscribe_url && n === 1 ? el("button", { class: "act",
           title: (r.unsubscribe_post ? "Sends the sender's one-click unsubscribe request to " : "Opens the unsubscribe page at ") +
             hostOf(r.unsubscribe_url) + " in a new tab, then deletes this message",
           onclick: () => unsubscribe(r) }, "Unsubscribe + delete") : null) : null));
@@ -395,6 +445,16 @@ function renderPane(r, data, error) {
   add("Received", fullWhen(r.received_at));
   head.append(meta);
 
+  if (n > 1) {
+    const to = [...new Set(r.group.map((x) => x.receiver))];
+    head.append(el("div", { class: "verdict" }, el("strong", {}, n + " similar messages"),
+      el("span", {}, "to " + to.slice(0, 4).join(", ") + (to.length > 4 ? " and " + (to.length - 4) + " more" : "") +
+        (addrs.size > 1 ? ", from " + addrs.size + " addresses" : "") + "."),
+      el("span", { style: "color:var(--muted)" }, "Showing the newest. The actions above apply to all " + n + "; untick Group similar to handle them one by one.")));
+  }
+  const before = acting && precedent(r);
+  if (before) head.append(el("div", { class: "verdict" }, el("strong", {}, "Decided before:"), el("span", {}, before.text)));
+
   const verdict = el("div", { class: "verdict" });
   if (view === "history") verdict.append(el("span", { class: "badge " + r.status }, "You " + r.status + " this"));
   verdict.append(r.verdict ? el("span", { class: "badge " + r.verdict }, "AI: " + r.verdict + " " + r.confidence + "%") : el("span", { class: "badge none" }, r.classify_error ? "AI failed" : "AI: waiting"),
@@ -404,7 +464,7 @@ function renderPane(r, data, error) {
 
   // The AI's view on whether this sender is worth putting on the blocklist.
   if (r.block_advice && r.verdict === "spam") {
-    const what = r.block_advice === "domain" ? "block everything from " + domain : r.block_advice === "address" ? "block " + addr : "don't block this sender";
+    const what = r.block_advice === "domain" ? "block " + domainText : r.block_advice === "address" ? "block " + addrText : "don't block this sender";
     head.append(el("div", { class: "verdict" }, el("strong", {}, "Blocklist:"), el("span", {}, "AI suggests: " + what + "."), el("span", { style: "color:var(--muted)" }, r.block_reason || "")));
   }
 
@@ -465,9 +525,10 @@ async function act(action, ids, list) {
   const gone = new Set(ids), at = indexOf(current);
   const next = gone.has(current) ? (rows.slice(at + 1).find((r) => !gone.has(r.id)) || [...rows.slice(0, at)].reverse().find((r) => !gone.has(r.id))) : null;
   try {
-    const { done, listed } = await api("/api/actions", list ? { action, ids, list } : { action, ids });
+    const all = expand(ids);
+    const { done, listed } = await api("/api/actions", list ? { action, ids: all, list } : { action, ids: all });
     toast(done + " message" + (done > 1 ? "s " : " ") + (action === "release" ? "released to the mailbox" : "deleted") +
-      (listed?.length ? "; " + listed.join(", ") + " is on the " + (action === "release" ? "whitelist" : "blocklist") : ""));
+      (listed?.length ? "; " + listed.join(", ") + (listed.length > 1 ? " are" : " is") + " on the " + (action === "release" ? "whitelist" : "blocklist") : ""));
   } catch (err) { toast(err.message); }
   if (next) { current = null; setCurrent(next.id, false); }
   await load();
@@ -477,21 +538,29 @@ async function act(action, ids, list) {
 async function load() {
   try {
     const [list, status] = await Promise.all([api("/api/messages?view=" + view), api("/api/status")]);
-    rows = list.rows;
-    selected = new Set([...selected].filter((id) => rows.some((r) => r.id === id)));
-    if (indexOf(anchor) < 0) anchor = null;
-    const had = current;
-    if (indexOf(current) < 0) current = rows[0]?.id ?? null;
+    raw = list.rows; similar = list.similar || {};
     for (const v of ["review", "spam", "history"]) $("n-" + v).textContent = status.counts?.[v] ?? "";
     $("n-review").classList.toggle("some", (status.counts?.review ?? 0) > 0);
     const s = status.stats, p = status.lastPoll;
     const pollText = !p ? "No quarantine check yet" : p.error ? "Last check FAILED: " + p.error : "Last check " + shortWhen(p.at);
     const agree = s.decisions ? " · AI agreed with " + s.agreed + " of " + s.decisions + " decisions, missed " + s.missedLegitimate + " genuine" : "";
     $("status").textContent = pollText + " · " + status.provider + " / " + status.model + agree;
-    renderList();
-    rowEls.get(current)?.scrollIntoView({ block: "nearest" });
-    if (current !== had || !$("pane").children.length) showPane();
+    regroup();
   } catch (err) { $("status").textContent = err.message; }
+}
+
+/** Rebuild the list from raw, keeping your place: ticks and the open message follow their group. */
+function regroup() {
+  const size = () => rows.find((r) => r.id === current)?.group.length;
+  const had = current, hadSize = size();
+  rows = groupRows(raw);
+  const rowOf = (id) => rows.find((r) => r.group.some((x) => x.id === id))?.id ?? null;
+  selected = new Set([...selected].map(rowOf).filter((id) => id != null));
+  anchor = rowOf(anchor);
+  current = rowOf(current) ?? rows[0]?.id ?? null;
+  renderList();
+  rowEls.get(current)?.scrollIntoView({ block: "nearest" });
+  if (current !== had || size() !== hadSize || !$("pane").children.length) showPane();
 }
 
 document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
@@ -499,6 +568,12 @@ document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("cli
   document.querySelectorAll(".tabs button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
   load().then(() => $("list").focus());
 }));
+$("grouping").checked = grouping;
+$("grouping").addEventListener("change", (e) => {
+  grouping = e.target.checked;
+  try { localStorage.setItem("grouping", grouping ? "1" : "0"); } catch {}
+  regroup(); $("list").focus();
+});
 $("all").addEventListener("click", (e) => { selected = new Set(e.target.checked ? rows.map((r) => r.id) : []); paint(); });
 $("bulk-release").addEventListener("click", () => act("release", [...selected]));
 $("bulk-delete").addEventListener("click", () => act("delete", [...selected]));

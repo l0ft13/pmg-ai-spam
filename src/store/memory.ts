@@ -1,4 +1,4 @@
-import { senderAddress } from "../mail.js";
+import { groupKey, senderAddress } from "../mail.js";
 import type {
   Action,
   Classification,
@@ -6,6 +6,7 @@ import type {
   PastDecision,
   QuarantineItem,
   SenderHistory,
+  SimilarHistory,
   Stats,
   Verdict,
   View,
@@ -38,6 +39,7 @@ export class MemoryStore implements Store {
         envelope_sender: it.envelope_sender,
         from_header: it.from,
         sender_addr: senderAddress(it.from),
+        group_key: groupKey(it.from, it.subject, it.receiver) || null,
         subject: it.subject,
         received_at: new Date(it.time * 1000),
         spamlevel: it.spamlevel,
@@ -148,6 +150,18 @@ export class MemoryStore implements Store {
       released: same.filter((r) => r.status === "released").length,
       deleted: same.filter((r) => r.status === "deleted").length,
     };
+  }
+
+  async groupHistory(groupKeys: string[]): Promise<Record<string, SimilarHistory>> {
+    const out: Record<string, SimilarHistory> = {};
+    for (const r of this.rows) {
+      if (!r.group_key || !groupKeys.includes(r.group_key)) continue;
+      if (r.status !== "released" && r.status !== "deleted") continue;
+      const h = (out[r.group_key] ??= { released: 0, deleted: 0, last_at: null });
+      h[r.status]++;
+      if (!h.last_at || r.updated_at > h.last_at) h.last_at = r.updated_at;
+    }
+    return out;
   }
 
   async counts(spamHideConfidence: number): Promise<Record<View, number>> {

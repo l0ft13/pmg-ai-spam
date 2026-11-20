@@ -1,11 +1,13 @@
 import type { ParsedMail } from "../mail.js";
-import type { PastDecision, QuarantineItem, SenderHistory, SpamRule } from "../types.js";
+import type { PastDecision, QuarantineItem, SenderHistory, SimilarHistory, SpamRule } from "../types.js";
 
 export interface ClassifyInput {
   item: QuarantineItem;
   mail: ParsedMail;
   rules: SpamRule[];
   senderHistory: SenderHistory;
+  /** Decisions on earlier mail with the same sender name and subject, whatever address sent it. */
+  similarHistory: SimilarHistory;
   pastDecisions: PastDecision[];
   bodyCharLimit: number;
 }
@@ -24,7 +26,7 @@ export const CATEGORIES = [
 
 export const SYSTEM_PROMPT = `You triage email that a company's spam gateway has already quarantined. An administrator reviews the quarantine each day because the gateway sometimes catches genuine mail. Your verdict decides what they look at: mail you call "legitimate" or "unsure" goes on their review list, and mail you call "spam" with high confidence is filed out of sight and left to expire. A genuine message filed as spam is therefore the costly mistake, because nobody may ever see it. Spam that lands on the review list only costs the administrator a few seconds.
 
-Every message you see was flagged by the gateway, so most of it really is spam. Look for the exceptions: replies in an existing business conversation, invoices and orders from real suppliers, mail from customers, government and bank notices sent from their genuine domains, and automated notifications from services the company uses. Judge on the evidence together: whether the sender's domain matches who they claim to be, the SPF, DKIM and DMARC results, where the links really go compared with what their text says, the attachment types, the gateway rules that fired, and whether the administrator has released or deleted mail from this sender before.
+Every message you see was flagged by the gateway, so most of it really is spam. Look for the exceptions: replies in an existing business conversation, invoices and orders from real suppliers, mail from customers, government and bank notices sent from their genuine domains, and automated notifications from services the company uses. Judge on the evidence together: whether the sender's domain matches who they claim to be, the SPF, DKIM and DMARC results, where the links really go compared with what their text says, the attachment types, the gateway rules that fired, and whether the administrator has released or deleted mail from this sender, or mail with the same sender name and subject, before.
 
 The administrator's past decisions are the best guide to what this organisation considers wanted mail, so weigh them above your general expectations.
 
@@ -73,6 +75,7 @@ export function buildUserMessage(input: ClassifyInput): string {
     `- Envelope sender: ${item.envelope_sender || "(empty)"}`,
     `- Gateway spam score: ${item.spamlevel}`,
     `- Earlier mail from this sender address: ${senderHistory.released} released, ${senderHistory.deleted} deleted`,
+    `- Earlier mail with the same sender name and subject, from any address: ${input.similarHistory.released} released, ${input.similarHistory.deleted} deleted`,
     `- Rules matched: ${
       rules.length ? rules.map((r) => `${r.name} (${r.score})`).join(", ") : "(none reported)"
     }`,

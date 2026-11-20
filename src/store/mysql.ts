@@ -1,5 +1,5 @@
 import mysql, { type Pool, type ResultSetHeader, type RowDataPacket } from "mysql2/promise";
-import { senderAddress } from "../mail.js";
+import { groupKey, senderAddress } from "../mail.js";
 import type {
   Action,
   Classification,
@@ -7,6 +7,7 @@ import type {
   PastDecision,
   QuarantineItem,
   SenderHistory,
+  SimilarHistory,
   Stats,
   View,
 } from "../types.js";
@@ -20,6 +21,7 @@ const SCHEMA = [
     envelope_sender VARCHAR(320) NOT NULL DEFAULT '',
     from_header VARCHAR(500) NOT NULL DEFAULT '',
     sender_addr VARCHAR(320) NOT NULL DEFAULT '',
+    group_key VARCHAR(190) NULL,
     subject VARCHAR(1000) NOT NULL DEFAULT '',
     received_at DATETIME NOT NULL,
     spamlevel DECIMAL(6,2) NOT NULL DEFAULT 0,
@@ -41,7 +43,8 @@ const SCHEMA = [
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_pmg_id (pmg_id),
     KEY ix_status (status, received_at),
-    KEY ix_sender (sender_addr)
+    KEY ix_sender (sender_addr),
+    KEY ix_group (group_key)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS decisions (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -85,6 +88,30 @@ export class MysqlStore implements Store {
     await this.addColumn("messages", "block_reason", "VARCHAR(300) NULL AFTER block_advice");
     await this.addColumn("messages", "unsubscribe_url", "VARCHAR(2000) NULL AFTER block_reason");
     await this.addColumn("messages", "unsubscribe_post", "TINYINT(1) NULL AFTER unsubscribe_url");
+    await this.addColumn("messages", "group_key", "VARCHAR(190) NULL AFTER sender_addr");
+    await this.addIndex("messages", "ix_group", "group_key");
+    await this.fillGroupKeys();
+  }
+
+  private async addIndex(table: string, index: string, columns: string): Promise<void> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT 1 FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? LIMIT 1`,
+      [table, index],
+    );
+    if (!rows.length) await this.pool.query(`ALTER TABLE ${table} ADD INDEX ${index} (${columns})`);
+  }
+
+  /** Give messages stored before grouping existed their group key, so past decisions count from day one. */
+  private async fillGroupKeys(): Promise<void> {
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      "SELECT id, from_header, subject, receiver FROM messages WHERE group_key IS NULL",
+    );
+    for (const r of rows) {
+      const key = groupKey(r.from_header, r.subject, r.receiver);
+      // updated_at is when a person decided, and the history is sorted by it: leave it as it is.
+      if (key) await this.pool.query("UPDATE messages SET group_key = ?, updated_at = updated_at WHERE id = ?", [key, r.id]);
+    }
   }
 
   private async addColumn(table: string, column: string, definition: string): Promise<void> {
@@ -110,6 +137,7 @@ export class MysqlStore implements Store {
           it.envelope_sender.slice(0, 320),
           it.from.slice(0, 500),
           senderAddress(it.from).slice(0, 320),
+          groupKey(it.from, it.subject, it.receiver) || null,
           it.subject.slice(0, 1000),
           new Date(it.time * 1000),
           it.spamlevel,
@@ -117,7 +145,7 @@ export class MysqlStore implements Store {
         ]);
       await this.pool.query(
         `INSERT IGNORE INTO messages
-           (pmg_id, receiver, envelope_sender, from_header, sender_addr, subject, received_at, spamlevel, bytes)
+           (pmg_id, receiver, envelope_sender, from_header, sender_addr, group_key, subject, received_at, spamlevel, bytes)
          VALUES ?`,
         [rows],
       );
@@ -236,6 +264,20 @@ export class MysqlStore implements Store {
       [senderAddr],
     );
     return { released: Number(rows[0]?.released ?? 0), deleted: Number(rows[0]?.deleted ?? 0) };
+  }
+
+  async groupHistory(groupKeys: string[]): Promise<Record<string, SimilarHistory>> {
+    if (!groupKeys.length) return {};
+    const [rows] = await this.pool.query<RowDataPacket[]>(
+      `SELECT group_key, SUM(status = 'released') AS released, SUM(status = 'deleted') AS deleted,
+              MAX(updated_at) AS last_at
+         FROM messages WHERE status IN ('released', 'deleted') AND group_key IN (?)
+        GROUP BY group_key`,
+      [groupKeys],
+    );
+    return Object.fromEntries(
+      rows.map((r) => [r.group_key, { released: Number(r.released), deleted: Number(r.deleted), last_at: r.last_at }]),
+    );
   }
 
   async counts(spamHideConfidence: number): Promise<Record<View, number>> {

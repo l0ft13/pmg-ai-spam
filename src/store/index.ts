@@ -5,6 +5,7 @@ import type {
   PastDecision,
   QuarantineItem,
   SenderHistory,
+  SimilarHistory,
   Stats,
   View,
 } from "../types.js";
@@ -29,6 +30,8 @@ export interface Store {
   recordAction(ids: number[], action: Action, actor: string): Promise<void>;
   recentDecisions(limit: number): Promise<PastDecision[]>;
   senderHistory(senderAddr: string): Promise<SenderHistory>;
+  /** Past decisions on mail sharing each group key. Keys nobody has decided on are left out. */
+  groupHistory(groupKeys: string[]): Promise<Record<string, SimilarHistory>>;
   stats(): Promise<Stats>;
   /** How many messages each view of the review screen holds. */
   counts(spamHideConfidence: number): Promise<Record<View, number>>;
