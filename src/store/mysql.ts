@@ -216,6 +216,11 @@ export class MysqlStore implements Store {
     return rows as MessageRow[];
   }
 
+  async pending(): Promise<MessageRow[]> {
+    const [rows] = await this.pool.query<RowDataPacket[]>("SELECT * FROM messages WHERE status = 'pending'");
+    return rows as MessageRow[];
+  }
+
   async getMany(ids: number[]): Promise<MessageRow[]> {
     if (!ids.length) return [];
     const [rows] = await this.pool.query<RowDataPacket[]>("SELECT * FROM messages WHERE id IN (?)", [ids]);

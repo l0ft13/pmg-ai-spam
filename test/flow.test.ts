@@ -234,7 +234,7 @@ describe("poll, review and act", () => {
     const row = (await store.list("review", 90)).find((r) => r.pmg_id === "C1R102T1002")!;
     const payload = { action: "release", ids: [row.id] };
     const res = await app.inject({ method: "POST", url: "/api/actions", headers: POST, payload });
-    expect(res.json()).toEqual({ done: 1, listed: [] });
+    expect(res.json()).toEqual({ done: 1, listed: [], also: [] });
     expect(mock.actions).toEqual(["deliver:C1R102T1002"]);
 
     const again = await app.inject({ method: "POST", url: "/api/actions", headers: POST, payload });
@@ -260,13 +260,69 @@ describe("poll, review and act", () => {
       headers: POST,
       payload: { action: "delete", ids: [row.id], list: "domain" },
     });
-    expect(res.json()).toEqual({ done: 1, listed: ["mailer.parcel-notify.test"] });
+    expect(res.json()).toEqual({ done: 1, listed: ["mailer.parcel-notify.test"], also: [] });
     expect(mock.actions.slice(before)).toEqual([
       "blocklist-domain:mailer.parcel-notify.test",
       "delete:C1R101T1001",
     ]);
     // Already listed: not added twice.
     expect(await pmg.addToList("Blocklist", "domain", "MAILER.parcel-notify.test")).toBe(false);
+  });
+
+  it("deletes the rest of the queue that a new block rule covers, in both views", async () => {
+    const extra = (id: string, envelope_sender: string, from: string, subject: string, spamlevel = 6) => ({
+      id, receiver: "sarah@example-co.test", envelope_sender, from, subject, spamlevel, ageHours: 2, text: "Hello", rules: [] as [string, number][],
+    });
+    const own = await startMockPmg(0, [
+      extra("C2R1T1", "a@blocked.test", "A <a@blocked.test>", "One"),
+      extra("C2R2T2", "A@Blocked.test", "A <other@elsewhere.test>", "Two", 14),
+      extra("C2R3T3", "b@blocked.test", "B <b@blocked.test>", "Three"),
+      extra("C2R4T4", "", "B <b@blocked.test>", "Four", 14),
+      extra("C2R5T5", "a@sub.blocked.test", "A <a@blocked.test>", "Five"),
+      extra("C2R6T6", "", "no address", "Six"),
+    ]);
+    const ownPmg = new PmgClient({ url: own.url, username: "triage@pmg", password: "mock-password" });
+    const ownStore = new MemoryStore();
+    const ownPoller = new Poller({ pmg: ownPmg, store: ownStore, classifier: new HeuristicClassifier(), quarantineDays: 7, bodyCharLimit: 8000 });
+    const ownApp = buildServer({
+      pmg: ownPmg, store: ownStore, poller: ownPoller, webUser: "admin", webPassword: "test-password", spamHideConfidence: 90,
+      welcomelistName: "Welcomelist", blocklistName: "Blocklist", provider: "heuristic", model: "pmg-score",
+    });
+    try {
+      await ownPoller.run();
+      const left = async () => (await ownStore.pending()).map((r) => r.pmg_id).sort();
+      const act = async (pmgId: string, list: string) => {
+        const row = (await ownStore.pending()).find((r) => r.pmg_id === pmgId)!;
+        const payload = { action: "delete", ids: [row.id], list };
+        return (await ownApp.inject({ method: "POST", url: "/api/actions", headers: POST, payload })).json();
+      };
+
+      const byAddress = await act("C2R1T1", "address");
+      expect(byAddress).toMatchObject({ done: 1, listed: ["a@blocked.test"] });
+      expect(byAddress.also).toHaveLength(1);
+      expect(await left()).toEqual(["C2R3T3", "C2R4T4", "C2R5T5", "C2R6T6"]);
+
+      // The rest of the queue refusing to go does not undo the chosen delete.
+      const realAct = ownPmg.act.bind(ownPmg);
+      let calls = 0;
+      ownPmg.act = async (action, ids) => {
+        if (++calls === 2) throw new Error("gone already");
+        return realAct(action, ids);
+      };
+      const failed = await act("C2R3T3", "domain");
+      ownPmg.act = realAct;
+      expect(failed).toMatchObject({ done: 1, also: [] });
+      expect(failed.alsoError).toContain("gone already");
+      expect(await left()).toEqual(["C2R4T4", "C2R5T5", "C2R6T6"]);
+
+      // A subdomain and a message with no usable address are not covered by the rule.
+      await act("C2R4T4", "domain");
+      expect(await left()).toEqual(["C2R5T5", "C2R6T6"]);
+      expect((await ownStore.stats()).decisions).toBe(4);
+    } finally {
+      await ownApp.close();
+      await own.close();
+    }
   });
 
   it("marks mail that left the quarantine elsewhere as gone", async () => {

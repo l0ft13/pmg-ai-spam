@@ -197,12 +197,34 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     } catch (err) {
       return reply.code(502).send({ error: `PMG refused the action: ${(err as Error).message}` });
     }
+    const actor = (req as { actor?: string }).actor ?? "unknown";
     await deps.store.recordAction(
       rows.map((r) => r.id),
       body.data.action,
-      (req as { actor?: string }).actor ?? "unknown",
+      actor,
     );
-    return { done: rows.length, listed };
+
+    // A new block rule also clears what it would have stopped from the rest of the queue.
+    const also: number[] = [];
+    let alsoError: string | undefined;
+    if (body.data.action === "delete" && body.data.list) {
+      const kind = body.data.list;
+      try {
+        const matches = (await deps.store.pending()).filter((r) => listed.includes(listEntry(r, kind) ?? ""));
+        // In PMG's own batch size, so a refusal part way leaves the earlier batches recorded.
+        for (let i = 0; i < matches.length; i += 50) {
+          const batch = matches.slice(i, i + 50);
+          await deps.pmg.act("delete", batch.map((r) => r.pmg_id));
+          const ids = batch.map((r) => r.id);
+          await deps.store.recordAction(ids, "delete", actor);
+          also.push(...ids);
+        }
+      } catch (err) {
+        // The chosen messages are already dealt with, so this is not a failed request.
+        alsoError = `Could not delete all other mail matching the rule: ${(err as Error).message}`;
+      }
+    }
+    return { done: rows.length, listed, also, alsoError };
   });
 
   app.post("/api/poll", async (_req, reply) => {

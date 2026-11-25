@@ -25,6 +25,8 @@ export interface Store {
   /** Mark pending messages that PMG no longer lists (expired, or handled in PMG itself). */
   markGone(presentPmgIds: string[]): Promise<number>;
   list(view: View, spamHideConfidence: number): Promise<MessageRow[]>;
+  /** Every message still waiting for a decision, whichever view it sits in. */
+  pending(): Promise<MessageRow[]>;
   getMany(ids: number[]): Promise<MessageRow[]>;
   /** Record a person's decision and close the messages. */
   recordAction(ids: number[], action: Action, actor: string): Promise<void>;

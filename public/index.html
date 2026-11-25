@@ -521,14 +521,17 @@ async function showPane() {
 /* ---------- actions and loading ---------- */
 
 async function act(action, ids, list) {
-  // Land on the first message after the ones being handled.
-  const gone = new Set(ids), at = indexOf(current);
-  const next = gone.has(current) ? (rows.slice(at + 1).find((r) => !gone.has(r.id)) || [...rows.slice(0, at)].reverse().find((r) => !gone.has(r.id))) : null;
+  let next = null;
   try {
     const all = expand(ids);
-    const { done, listed } = await api("/api/actions", list ? { action, ids: all, list } : { action, ids: all });
+    const { done, listed, also, alsoError } = await api("/api/actions", list ? { action, ids: all, list } : { action, ids: all });
+    // Land on the first message after the ones handled, including any the new rule swept up.
+    const gone = new Set([...all, ...(also || [])]), at = indexOf(current);
+    if (gone.has(current)) next = rows.slice(at + 1).find((r) => !gone.has(r.id)) || rows.slice(0, Math.max(at, 0)).reverse().find((r) => !gone.has(r.id));
     toast(done + " message" + (done > 1 ? "s " : " ") + (action === "release" ? "released to the mailbox" : "deleted") +
-      (listed?.length ? "; " + listed.join(", ") + (listed.length > 1 ? " are" : " is") + " on the " + (action === "release" ? "whitelist" : "blocklist") : ""));
+      (listed?.length ? "; " + listed.join(", ") + (listed.length > 1 ? " are" : " is") + " on the " + (action === "release" ? "whitelist" : "blocklist") : "") +
+      (also?.length ? "; " + also.length + " more matching message" + (also.length > 1 ? "s" : "") + " deleted" : "") +
+      (alsoError ? ". " + alsoError : ""));
   } catch (err) { toast(err.message); }
   if (next) { current = null; setCurrent(next.id, false); }
   await load();

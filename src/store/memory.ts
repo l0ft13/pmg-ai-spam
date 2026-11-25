@@ -121,6 +121,10 @@ export class MemoryStore implements Store {
     );
   }
 
+  async pending(): Promise<MessageRow[]> {
+    return this.rows.filter((r) => r.status === "pending");
+  }
+
   async getMany(ids: number[]): Promise<MessageRow[]> {
     return this.rows.filter((r) => ids.includes(r.id));
   }

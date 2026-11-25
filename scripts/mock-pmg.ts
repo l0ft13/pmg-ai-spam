@@ -5,7 +5,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { pathToFileURL } from "node:url";
 
-interface MockMail {
+export interface MockMail {
   id: string;
   receiver: string;
   envelope_sender: string;
@@ -151,8 +151,8 @@ export interface MockPmg {
   close(): Promise<void>;
 }
 
-export async function startMockPmg(port = 0): Promise<MockPmg> {
-  const mails = MAILS.map((m) => ({ ...m }));
+export async function startMockPmg(port = 0, from: MockMail[] = MAILS): Promise<MockPmg> {
+  const mails = from.map((m) => ({ ...m }));
   const actions: string[] = [];
   const lists: Record<string, Record<string, string>[]> = {};
   const TICKET = "PMG:triage@pmg:MOCKTICKET";

@@ -114,6 +114,11 @@ in-RAM store and no AI. Sign in with `demo` / `demo-password`.
 - "Release + whitelist" and "Delete + blocklist" change PMG's system-wide
   Welcomelist and Blocklist, so the PMG user then needs the Administrator role.
   Whole-domain entries are refused for shared domains such as gmail.com.
+- "Delete + blocklist" also deletes every other pending message the new entry
+  covers, in both the review and obvious spam lists and whatever the AI said
+  about it. It matches as PMG is given the rule: the envelope sender (the From
+  address when that is empty), by exact address or exact domain. Subdomains are
+  left alone. The deletions are recorded under History.
 - "Unsubscribe + delete" is the one place a link from a quarantined mail is
   followed: it opens in a new tab of your own browser (the server never fetches
   it), with no referrer, and the message is then deleted. The address is the
