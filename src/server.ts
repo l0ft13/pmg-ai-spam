@@ -46,6 +46,30 @@ export function listEntry(row: MessageRow, kind: "address" | "domain"): string |
   return kind === "address" ? addr : addr.slice(addr.lastIndexOf("@") + 1);
 }
 
+/**
+ * Bulk senders often build the recipient into the envelope sender ("news-sarah=example.com@bulk.test"),
+ * so blocking that address covers one mailbox only: suggest its domain instead. Applied when the list is
+ * read, so mail classified earlier benefits too. Advice of "none" is kept.
+ */
+export function withDomainAdvice(row: MessageRow): MessageRow {
+  if (row.block_advice !== "address") return row;
+  const addr = listEntry(row, "address");
+  const domain = listEntry(row, "domain");
+  const ours = row.receiver.toLowerCase().split("@")[1];
+  if (!addr || !domain || !ours) return row;
+  const local = addr.slice(0, addr.lastIndexOf("@"));
+  const at = local.indexOf(`=${ours}`);
+  // The domain must end there, and a forwarder's rewritten address (SRS) is not a bulk sender's.
+  if (at < 1 || /^[a-z0-9.]/.test(local.slice(at + 1 + ours.length)) || /^srs[01][=+-]/.test(local)) return row;
+  // Mail services share their subdomains between customers as well.
+  if ([...SHARED_DOMAINS].some((d) => domain === d || domain.endsWith(`.${d}`))) return row;
+  return {
+    ...row,
+    block_advice: "domain",
+    block_reason: "The sender's address has the recipient built in, so blocking the address would only cover one mailbox.",
+  };
+}
+
 function same(a: string, b: string): boolean {
   const x = Buffer.from(a);
   const y = Buffer.from(b);
@@ -89,7 +113,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const rows = await deps.store.list(view as View, deps.spamHideConfidence);
     // What was decided before about mail like each pending message, so the same call can be made again.
     const keys = view === "history" ? [] : [...new Set(rows.flatMap((r) => (r.group_key ? [r.group_key] : [])))];
-    return { rows, similar: await deps.store.groupHistory(keys) };
+    return { rows: rows.map(withDomainAdvice), similar: await deps.store.groupHistory(keys) };
   });
 
   app.get("/api/status", async () => ({

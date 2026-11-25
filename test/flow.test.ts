@@ -6,8 +6,9 @@ import { pickUnsubscribe, toClassification } from "../src/classifier/schema.js";
 import { groupKey, parseMail, senderAddress } from "../src/mail.js";
 import { joinMessage, PmgClient } from "../src/pmg.js";
 import { Poller } from "../src/poller.js";
-import { buildServer, listEntry } from "../src/server.js";
+import { buildServer, listEntry, withDomainAdvice } from "../src/server.js";
 import { MemoryStore } from "../src/store/memory.js";
+import type { MessageRow } from "../src/types.js";
 
 const AUTH = "Basic " + Buffer.from("admin:test-password").toString("base64");
 const POST = { authorization: AUTH, "x-requested-with": "mailtriage", "content-type": "application/json" };
@@ -86,6 +87,25 @@ describe("blocking advice", () => {
     expect(toClassification({ ...raw, verdict: "spam" }, "p", "m", mail).block_advice).toBe("domain");
     expect(toClassification({ ...raw, verdict: "unsure" }, "p", "m", mail).block_advice).toBe("none");
     expect(toClassification({ ...raw, verdict: "legitimate" }, "p", "m", mail).block_advice).toBe("none");
+  });
+});
+
+describe("blocking advice for addresses with the recipient built in", () => {
+  const advice = (envelope_sender: string, block_advice = "address") =>
+    withDomainAdvice({ envelope_sender, sender_addr: "", receiver: "Accounts@example-co.test", block_advice } as MessageRow).block_advice;
+
+  it("is the domain", () => {
+    expect(advice("ayalq-accounts=example-co.test@ayalq.bulk.test")).toBe("domain");
+    expect(advice("bounce+1-Accounts=Example-Co.test@bulk.test")).toBe("domain");
+  });
+
+  it("is left alone for other senders, shared mail services and advice not to block", () => {
+    expect(advice("promo@bulk.test")).toBe("address");
+    expect(advice("x=example-co.test.other@bulk.test")).toBe("address");
+    expect(advice("prvs=1234=john.smith@bulk.test")).toBe("address");
+    expect(advice("srs0=ab=cd=example-co.test=sarah@forwarder.test")).toBe("address");
+    expect(advice("a=example-co.test@eu-west-1.amazonses.com")).toBe("address");
+    expect(advice("a=example-co.test@bulk.test", "none")).toBe("none");
   });
 });
 
@@ -267,6 +287,20 @@ describe("poll, review and act", () => {
     ]);
     // Already listed: not added twice.
     expect(await pmg.addToList("Blocklist", "domain", "MAILER.parcel-notify.test")).toBe(false);
+  });
+
+  it("lists an address PMG refuses as an email entry as an exact regex, once", async () => {
+    const addr = "ayalq-accounts=example-co.test@news.bulk-offers.test";
+    const before = mock.actions.length;
+    expect(await pmg.addToList("Blocklist", "email", addr)).toBe(true);
+    expect(await pmg.addToList("Blocklist", "email", addr.toUpperCase())).toBe(false);
+    const [action, ...rest] = mock.actions.slice(before);
+    expect(rest).toEqual([]);
+    expect(action).toMatch(/^blocklist-regex:/);
+    const rule = new RegExp(action!.slice("blocklist-regex:".length));
+    expect(rule.test(addr)).toBe(true);
+    expect(rule.test(`x${addr}`)).toBe(false);
+    expect(rule.test(addr.replace(/\./g, "x"))).toBe(false);
   });
 
   it("deletes the rest of the queue that a new block rule covers, in both views", async () => {

@@ -187,12 +187,14 @@ export async function startMockPmg(port = 0, from: MockMail[] = MAILS): Promise<
     if (path === "/config/ruledb/who") {
       return send(200, [{ id: 2, name: "Blocklist" }, { id: 3, name: "Welcomelist" }]);
     }
-    const who = path.match(/^\/config\/ruledb\/who\/(\d+)\/(objects|email|domain)$/);
+    const who = path.match(/^\/config\/ruledb\/who\/(\d+)\/(objects|email|domain|regex)$/);
     if (who) {
       const list = (lists[who[1]!] ??= []);
       if (who[2] === "objects") return send(200, list);
       if (req.headers.csrfpreventiontoken !== "mock-csrf") return send(401, null);
       const value = (await form(req)).get(who[2]!) ?? "";
+      // Like the real PMG: only these characters may come before the @.
+      if (who[2] === "email" && !/^[\w+~-]+(\.[\w+~-]+)*@[a-z0-9.-]+$/i.test(value)) return send(400, null);
       list.push({ [who[2]!]: value });
       actions.push(`${who[1] === "3" ? "welcomelist" : "blocklist"}-${who[2]}:${value}`);
       return send(200, list.length);

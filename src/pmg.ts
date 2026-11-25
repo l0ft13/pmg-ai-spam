@@ -160,13 +160,14 @@ export class PmgClient {
     const groups = await this.request<{ id: number; name: string }[]>("GET", "/config/ruledb/who", {});
     const group = groups.find((g) => g.name.toLowerCase() === groupName.toLowerCase());
     if (!group) throw new PmgError(`PMG has no rule list called "${groupName}"`);
-    const existing = await this.request<{ email?: string; domain?: string }[]>(
+    const entry = listObject(kind, value);
+    const existing = await this.request<{ email?: string; domain?: string; regex?: string }[]>(
       "GET",
       `/config/ruledb/who/${group.id}/objects`,
       {},
     );
-    if (existing.some((o) => (o[kind] ?? "").toLowerCase() === value.toLowerCase())) return false;
-    await this.request<number>("POST", `/config/ruledb/who/${group.id}/${kind}`, { [kind]: value });
+    if (existing.some((o) => (o[entry.type] ?? "").toLowerCase() === entry.value.toLowerCase())) return false;
+    await this.request<number>("POST", `/config/ruledb/who/${group.id}/${entry.type}`, { [entry.type]: entry.value });
     return true;
   }
 
@@ -180,6 +181,19 @@ export class PmgClient {
       });
     }
   }
+}
+
+// What PMG accepts before the @ in an "email" entry.
+const PMG_EMAIL_USER = /^[\w+~-]+(\.[\w+~-]+)*@/;
+
+/**
+ * PMG refuses some valid addresses as "email" entries, such as the "=" that
+ * bulk senders use to carry the recipient. Those go in as a regex that matches
+ * exactly that address.
+ */
+function listObject(kind: "email" | "domain", value: string): { type: "email" | "domain" | "regex"; value: string } {
+  if (kind === "domain" || PMG_EMAIL_USER.test(value)) return { type: kind, value };
+  return { type: "regex", value: `^${value.toLowerCase().replace(/[!-/:-@[-^`{-~]/g, "\\$&")}$` };
 }
 
 const MIME_HEADER = /^(mime-version|content-type):/im;
